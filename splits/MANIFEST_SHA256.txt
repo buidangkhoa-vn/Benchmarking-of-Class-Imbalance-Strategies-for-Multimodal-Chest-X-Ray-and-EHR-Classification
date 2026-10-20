@@ -1,0 +1,7 @@
+# SHA-256 of the split manifests used in the paper (files are NOT distributed: they contain MIMIC subject identifiers).
+# Regenerate them with the notebooks (deterministic, seed 42) and compare with: sha256sum <file>
+db2050c35f70632fa09ecb9fbe24ed7db6175ad0acdc47e67aff02c239eb9802  folds_subject_s42.csv
+0580ec780c7024cda9e472689ca3b8ba5561b12aa08ff60a87c25436bde69e58  folds_record_s42.csv
+8ff73dbfd26608657ecf27c8927cc1c3f24c83e5d232abd47b5cddabcf948d7a  v4_folds_P5_temporal.csv
+# input cohort file (x_ray_and_features_data.csv, 29,083 x 48); pandas-hash used inside the notebooks: da85519958e4bccb
+3fab16bb3496c0184520d8a5eb6e142e5ac693eff1a70227cf172f3ce4d22356  x_ray_and_features_data.csv
