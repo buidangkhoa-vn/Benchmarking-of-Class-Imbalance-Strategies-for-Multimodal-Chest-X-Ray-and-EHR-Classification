@@ -33,8 +33,12 @@ This project relies on the MIMIC-IV (v2.2) and MIMIC-CXR-JPG (v2.1.0) databases,
 | 5c | `analysis/analyze_v4.py`, `analysis/fig2_v4.py` | Analysis with admission-aligned and clean labels (table "Admission-aligned (A) and clean (C) labels"), modality and strategy tests, Fig. 2 | Sec. V-D |
 | 6 | `notebooks/STEP6_v5_2026-10-19_chexpert_labels.ipynb` | Second label source: MIMIC-CXR CheXpert report labels of the same radiographs (P1 vs. P2); time-aligned EHR-history features with admission-aligned and clean labels | Sec. IV-F, V-D, V-E |
 | 6b | `analysis/analyze_v5.py` | CheXpert-label and EHR-history analysis (tables, paired tests, strategy effects) | Sec. V-D, V-E |
+| 7 | `notebooks/STEP7_v7_2026-10-22_ablation_hparams_aligned.ipynb` | Hyperparameter ablation (regularised Random Forest / Extra Trees / LightGBM, logistic regression with C ∈ {1, 0.1, 0.01}) under P1, P2, P4, P4-C, and the fully aligned subset (radiographs whose own admission is the source of the released labels and EHR values) | Sec. V-F |
+| 7b | `analysis/analyze_v7.py` | Ablation and aligned-subset analysis | Sec. V-F |
+| 8 | `analysis/tables_sd_ci.py` | Mean ± SD and 95% CIs for the protocol tables (no refits) | Tables IV–VII |
+| 8b | `analysis/selection_and_timing_checks.py` | Per-fold configuration selection, results without the rarest targets, P5 temporal overlap, timing of prior-diagnosis flags | Sec. IV-E/F, V-F |
 
-`src/` holds the Python sources of all notebooks and the builders that generate them (`make_variants.py` → STEP1–3, `make_v3.py` → STEP4/4a, `make_v5.py` → STEP6; STEP5 is `to_ipynb.py nb_v4_src.py`). Running the builders regenerates the notebooks in `notebooks/` byte-for-byte.
+`src/` holds the Python sources of all notebooks and the builders that generate them (`make_variants.py` → STEP1–3, `make_v3.py` → STEP4/4a, `make_v5.py` → STEP6; STEP5 and STEP7 are `to_ipynb.py nb_v4_src.py` and `to_ipynb.py nb_v7_src.py`). Running the builders regenerates the notebooks in `notebooks/` byte-for-byte.
 
 ## Inputs
 
@@ -47,7 +51,7 @@ This project relies on the MIMIC-IV (v2.2) and MIMIC-CXR-JPG (v2.1.0) databases,
 
 The notebooks were run on Google Colab (Pro) with the data on Google Drive under `MyDrive/data_aug/` and MIMIC-CXR-JPG under `MyDrive/.../mimic-cxr-jpg-2.1.0.physionet.org`. Edit the **control panel** (first code cell) of each notebook for other layouts. All notebooks are resume-safe (finished tasks are skipped after a restart) and write every output into a version-tagged folder (`MMMDA_runs/v3_...`, `v4_...`, `v5_...`). Fill `GCP_PROJECT` before running STEP4/STEP6 (placeholders replace the project id and account used by the authors; nothing else was changed).
 
-Order: STEP1 → STEP2 (three sessions in parallel) → STEP3 → STEP4 → STEP5 → STEP6. The analysis scripts read the notebook outputs; paths are set with environment variables:
+Order: STEP1 → STEP2 (three sessions in parallel) → STEP3 → STEP4 → STEP5 → STEP6 → STEP7. The analysis scripts read the notebook outputs; paths are set with environment variables:
 
 ```bash
 export MMMDA_DATA_DIR=/path/to/data          # x_ray_and_features_data.csv and analysis/ from STEP3 (incl. manifests/)
@@ -58,6 +62,11 @@ export MMMDA_V4_ANALYSIS=/path/to/v4_2026-10-19_admlabels/v4_analysis MMMDA_V4_O
 python analysis/analyze_v4.py && python analysis/fig2_v4.py          # overwrites Fig. 2 with the final version
 export MMMDA_V5_ANALYSIS=/path/to/v5_2026-10-19_chexpert/v5_analysis MMMDA_V5_OUT=out_v5
 python analysis/analyze_v5.py
+export MMMDA_V7_ANALYSIS=/path/to/v7_2026-10-22_ablation/v7_analysis MMMDA_V7_OUT=out_v7
+python analysis/analyze_v7.py
+python analysis/tables_sd_ci.py                                        # uses MMMDA_OUT, MMMDA_V4_ANALYSIS, MMMDA_V5_ANALYSIS
+export MMMDA_V3_BQ=/path/to/v3_bq MMMDA_P5_MANIFEST=/path/to/v3_folds_P5_temporal.csv
+python analysis/selection_and_timing_checks.py
 python analysis/original_benchmark_diagnostics.py --csv x_ray_and_features_data.csv --preds selected_predictions.csv.gz
 python analysis/label_provenance_audit.py --csv x_ray_and_features_data.csv --bq-dir /path/to/v3_bq --out audit_out
 ```
