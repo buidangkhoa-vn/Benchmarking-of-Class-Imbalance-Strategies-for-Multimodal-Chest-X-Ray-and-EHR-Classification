@@ -18,24 +18,24 @@ BQ = cell_with("CELL 5 — BIGQUERY EXTRACTION")
 cand = re.search(r"BQ_CANDIDATES = \[.*?\]\s*#[^\n]*\n", CONTROL, re.S).group(0)
 
 intro = '''# %% [markdown]
-# # STEP 4a (v3) — Trích 4 bảng MIMIC-IV từ BigQuery bằng TÀI KHOẢN CHÍNH
+# # STEP 4a (v3) — Extract four MIMIC-IV tables from BigQuery with the PhysioNet-credentialed account
 #
-# Chỉ dùng khi tài khoản chạy Colab Pro (STEP4b) **không** có quyền PhysioNet trên BigQuery và cách dán mã ở STEP4b bị lỗi.
+# Use only if the account that runs Colab (STEP4) has **no** PhysioNet access on BigQuery and the code-paste login in STEP4 fails.
 #
-# 1. Mở notebook này trên Colab **bằng tài khoản <your PhysioNet-credentialed Google account>** (tài khoản có quyền PhysioNet). Colab miễn phí là đủ, runtime CPU, ~5 phút.
-# 2. `GCP_PROJECT` đã điền sẵn `YOUR_GCP_PROJECT_ID` → **Run all**.
-# 3. Khi được hỏi, upload file `x_ray_and_features_data.csv` (trong `D:\\project_TTNT_Data_aug\\`); cửa sổ đăng nhập Google: chọn tài khoản chính, tick hết quyền.
-# 4. Cuối cùng trình duyệt tự tải về `v3_bq_extract.zip` (~10 MB).
-# 5. Upload file zip đó vào Google Drive **của tài khoản chạy STEP4b**, thư mục `MyDrive/data_aug/MMMDA_runs/` → mở STEP4b → Run all.
+# 1. Open this notebook in Colab **with <your PhysioNet-credentialed Google account>** (the account with PhysioNet access). Free Colab is enough; CPU runtime, ~5 min.
+# 2. Set `GCP_PROJECT` (placeholder `YOUR_GCP_PROJECT_ID`) → **Run all**.
+# 3. When prompted, upload `x_ray_and_features_data.csv`; in the Google sign-in window choose the credentialed account and grant all permissions.
+# 4. The browser then downloads `v3_bq_extract.zip` (~10 MB).
+# 5. Upload that zip to the Google Drive **of the account that runs STEP4**, folder `MyDrive/data_aug/MMMDA_runs/` → open STEP4 → Run all.
 #
-# Notebook không lưu gì lên Drive của tài khoản chính.
+# This notebook writes nothing to the Drive of the credentialed account.
 
 '''
 control = f'''# %%
 # ============================== CELL 1 — CONTROL PANEL ==============================
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # project BigQuery của <your PhysioNet-credentialed Google account> (tài khoản có quyền PhysioNet)
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of <your PhysioNet-credentialed Google account>
 VERSION       = "v3_2026-10-19"
-BQ_AUTH       = "same_account"        # notebook này chạy bằng chính tài khoản có quyền -> cửa sổ đăng nhập thường
+BQ_AUTH       = "same_account"        # this notebook runs under the credentialed account itself -> standard sign-in window
 EXPECTED_HASH = "da85519958e4bccb"
 {cand}
 '''
@@ -58,7 +58,7 @@ if IN_COLAB:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "db-dtypes"], check=True)
     if not os.path.exists(CSV_PATH):
         from google.colab import files
-        print("Chọn file x_ray_and_features_data.csv (trong D:\\\\project_TTNT_Data_aug\\\\) để upload ...")
+        print("Select x_ray_and_features_data.csv to upload ...")
         up = files.upload()
         name = next(iter(up))
         if os.path.abspath(name) != CSV_PATH:
@@ -85,8 +85,8 @@ with zipfile.ZipFile(str(ZIP) + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
     for f in list(BQF.values()) + [BQ_SRC]:
         z.write(f, f.name)
 os.replace(str(ZIP) + ".tmp", ZIP)
-print(f"XONG: {ZIP.name} ({ZIP.stat().st_size / 1e6:.1f} MB)")
-print("-> Upload file này vào Google Drive của tài khoản chạy STEP4b, thư mục MyDrive/data_aug/MMMDA_runs/ rồi Run all STEP4b.")
+print(f"DONE: {ZIP.name} ({ZIP.stat().st_size / 1e6:.1f} MB)")
+print("-> Upload this file to the Google Drive of the account that runs STEP4, folder MyDrive/data_aug/MMMDA_runs/, then Run all in STEP4.")
 if IN_COLAB:
     from google.colab import files
     files.download(str(ZIP))

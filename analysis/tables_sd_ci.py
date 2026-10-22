@@ -21,6 +21,9 @@ for (p, fs), d in S.groupby(['protocol', 'feature_set']):
     n = len(fm); r = dict(protocol=p, feature_set=fs, folds=n)
     for c in ['f2', 'pr', 'au']:
         r[c] = fm[c].mean(); r[c + '_sd'] = fm[c].std(ddof=1) if n > 1 else np.nan
+    if 'test_brier' in d and d.test_brier.notna().all():          # Brier only stored for P1-P3 (v2)
+        bf = d.groupby('fold').test_brier.mean(); r['brier'], r['brier_sd'] = bf.mean(), bf.std(ddof=1)
+        ptr = d.pos_train_before / d.n_train_before; r['brier_prevalence'] = float((d.test_prev * (1 - ptr) ** 2 + (1 - d.test_prev) * ptr ** 2).mean())
     h = T4 * r['f2_sd'] / np.sqrt(n) if n == 5 else np.nan; r['f2_lo'], r['f2_hi'] = r['f2'] - h, r['f2'] + h
     diff = (d.test_f2 - d.test_trivial_f2).values; m = len(diff); hd = stats.t.ppf(0.975, m - 1) * diff.std(ddof=1) / np.sqrt(m)
     r.update(delta=diff.mean(), delta_lo=diff.mean() - hd, delta_hi=diff.mean() + hd, pairs=m, p=wilcoxon(diff).pvalue if (diff != 0).any() else 1.0)

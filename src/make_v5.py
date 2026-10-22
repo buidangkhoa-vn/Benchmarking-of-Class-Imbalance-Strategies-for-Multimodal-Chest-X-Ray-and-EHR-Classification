@@ -16,46 +16,46 @@ AUTH = "".join(lines[184:219])          # v4 lines 185-219: bigquery import, aut
 assert AUTH.lstrip().startswith("from google.cloud import bigquery") and "SESSION_USER" in AUTH
 
 intro = r'''# %% [markdown]
-# # STEP 6 (v5) — Nhãn CheXpert từ báo cáo X-quang (gắn đúng từng ảnh): chia theo ảnh (P1) vs theo bệnh nhân (P2)
+# # STEP 6 (v5) — CheXpert report labels (one per radiograph): record split (P1) vs. patient split (P2)
 #
-# **Mục đích.** Kiểm tra các kết luận của bài trên một nguồn nhãn thứ hai, chuẩn và gắn đúng từng ảnh: nhãn CheXpert
-# (U-zeros) của MIMIC-CXR-JPG cho chính 29.083 ảnh của cohort. Câu hỏi:
-# 1. Khi nhãn đúng từng ảnh, chia theo ảnh (P1) còn thổi phồng điểm bao nhiêu so với chia theo bệnh nhân (P2)?
-# 2. Các chiến lược cân bằng dữ liệu có giúp gì trên nhãn chuẩn không?
-# 3. Ảnh (11 điểm, RAD-DINO) so với EHR thế nào?
+# **Purpose.** Test the paper's conclusions on a second label source that is defined per radiograph: the CheXpert labels
+# (U-zeros) that MIMIC-CXR-JPG provides for the same 29,083 radiographs of the cohort. Questions:
+# 1. With per-radiograph labels, how much does the record split (P1) still inflate results compared with the patient split (P2)?
+# 2. Do the imbalance strategies help with these labels?
+# 3. How do the image inputs (11 scores, RAD-DINO) compare with EHR?
 #
-# Thêm nhóm thí nghiệm **EHR đúng thời điểm**: với nhãn sửa (A) và nhãn sạch (C) của STEP5, thay 11 biến EHR cũ bằng
-# đặc trưng lấy đúng thời điểm chụp: tuổi tại chính lần nhập viện + 8 cờ "đã được chẩn đoán ở lần nhập viện TRƯỚC"
-# (`P4_hist`, `P4C_hist`, dùng đúng fold P2), một mình và kết hợp với RAD-DINO.
+# Also adds **time-aligned EHR** experiments: with the admission-aligned (A) and clean (C) labels of STEP5, the 11 released EHR
+# variables are replaced by features known at imaging time: age at the radiograph's own admission + 8 flags "diagnosed in an EARLIER admission"
+# (`P4_hist`, `P4C_hist`, on the P2 folds), alone and fused with RAD-DINO.
 #
-# **Cách chạy** — tài khoản phụ (Colab Pro), Runtime **CPU, High-RAM** → **Run all**. Không cần sửa gì.
-# - Notebook tự tìm thư mục `mimic-cxr-jpg-2.1.0.physionet.org` trên Drive (như STEP1) và đọc `mimic-cxr-2.0.0-chexpert.csv.gz`
-#   + `mimic-cxr-2.0.0-metadata.csv.gz`. Nếu thiếu file chexpert, notebook mới hỏi BigQuery (link → chọn
-#   <your PhysioNet-credentialed Google account> → dán mã), giống STEP4.
-# - Cần thư mục kết quả STEP5 (`MMMDA_runs/v4_2026-10-19_admlabels`) và bảng BigQuery v3 (`MMMDA_runs/v3_2026-10-19_P4P5/v3_bq`) còn trên Drive.
-# - Ước tính ~90–110 phút với 8 core. Rớt kết nối: Run all lại (tự bỏ qua phần đã xong).
-# - Xong khi thấy `FLUSH XONG`. Tải **một file** `v5_for_claude.zip` về `D:\project_TTNT_Data_aug\analysis_v5\`.
+# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** → **Run all**. Nothing to edit.
+# - The notebook finds the `mimic-cxr-jpg-2.1.0.physionet.org` folder on Drive (as in STEP1) and reads `mimic-cxr-2.0.0-chexpert.csv.gz`
+#   + `mimic-cxr-2.0.0-metadata.csv.gz`. Only if the CheXpert file is missing does it query BigQuery (link → choose
+#   <your PhysioNet-credentialed Google account> → paste the code), as in STEP4.
+# - Needs the STEP5 output folder (`MMMDA_runs/v4_2026-10-19_admlabels`) and the v3 BigQuery tables (`MMMDA_runs/v3_2026-10-19_P4P5/v3_bq`) on Drive.
+# - Expected time ~90–110 min with 8 cores. If the session drops: Run all again (finished tasks are skipped).
+# - Done when `FLUSH DONE` appears. The summary archive is `v5_for_claude.zip` in the output folder.
 #
-# Mọi thư mục/file notebook tạo ra đều có tiền tố phiên bản `v5`.
+# Every folder/file this notebook creates carries the version prefix `v5`.
 
 '''
 control = r'''# %%
 # ============================== CELL 1 — CONTROL PANEL ==============================
-RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 nhãn, thư mục riêng)
-VERSION       = "v5_2026-10-19"       # tag phiên bản: có trong tên mọi thư mục/file tạo ra
-MIMIC_JPG_ROOT = None                 # None = tự tìm; hoặc vd "/content/drive/MyDrive/MIMIC_CXR/mimic-cxr-jpg-2.1.0.physionet.org"
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # chỉ dùng nếu trên Drive không có file chexpert
+RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
+VERSION       = "v5_2026-10-19"       # version tag: part of every folder/file name this notebook creates
+MIMIC_JPG_ROOT = None                 # None = search automatically; or e.g. "/content/drive/MyDrive/MIMIC_CXR/mimic-cxr-jpg-2.1.0.physionet.org"
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # only used if the CheXpert file is not on Drive
 BQ_AUTH       = "other_account"
 
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
 CSV_PATH      = f"{DRIVE_ROOT}/x_ray_and_features_data.csv"
 EXPECTED_HASH = "da85519958e4bccb"
 RADDINO_DIR   = f"{DRIVE_ROOT}/embeddings/raddino"
-V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # fold P2 (chỉ đọc)
-V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # fold P1 (chỉ đọc)
+V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # P2 folds (read only)
+V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # P1 folds (read only)
 OUT_ROOT      = f"{DRIVE_ROOT}/MMMDA_runs"                               # -> MMMDA_runs/v5_2026-10-19_chexpert/
-V4_ADMLABELS  = f"{DRIVE_ROOT}/MMMDA_runs/v4_2026-10-19_admlabels/v4_labels/v4_admission_labels.csv.gz"   # nhãn A/C + cờ tiền sử (STEP5)
-V3_BQ_DIR     = f"{DRIVE_ROOT}/MMMDA_runs/v3_2026-10-19_P4P5/v3_bq"     # admissions/patients (tuổi tại lần nhập viện)
+V4_ADMLABELS  = f"{DRIVE_ROOT}/MMMDA_runs/v4_2026-10-19_admlabels/v4_labels/v4_admission_labels.csv.gz"   # A/C labels + prior-diagnosis flags (STEP5)
+V3_BQ_DIR     = f"{DRIVE_ROOT}/MMMDA_runs/v3_2026-10-19_P4P5/v3_bq"     # admissions/patients (age at admission)
 LOCAL_CACHE   = "/content/mmmda_v5_cache"
 LOCAL_OUT     = "/content/mmmda_v5_out"
 
@@ -63,7 +63,7 @@ LOCAL_OUT     = "/content/mmmda_v5_out"
 CX_TARGETS = {"cx_pneumonia": "Pneumonia", "cx_lung_opacity": "Lung Opacity", "cx_effusion": "Pleural Effusion",
               "cx_cardiomegaly": "Cardiomegaly", "cx_edema": "Edema", "cx_pneumothorax": "Pneumothorax",
               "cx_fracture": "Fracture", "cx_lung_lesion": "Lung Lesion"}
-N_PAR         = None                  # số process song song; None = tất cả core
+N_PAR         = None                  # number of parallel processes; None = all cores
 
 '''
 setup = cell("CELL 2 — INSTALL + MOUNT").replace(
@@ -103,7 +103,7 @@ if not (LABF.exists() and MAPF.exists()):
             meta = pd.read_csv(f"{root}/mimic-cxr-2.0.0-metadata.csv.gz", usecols=["dicom_id", "subject_id", "study_id"])
             src = {"source": "drive", "root": root, "file": Path(cand[0]).name}
         else:
-            print("Không thấy file chexpert trên Drive -> lấy từ BigQuery")
+            print("CheXpert file not found on Drive -> reading it from BigQuery")
             SIDS_BQ = [int(s) for s in df.subject_id.unique()]
 ''' + "\n".join("        " + l if l.strip() else l for l in AUTH.splitlines()) + r'''
             P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS_BQ)]
@@ -113,21 +113,21 @@ if not (LABF.exists() and MAPF.exists()):
                     for tb in client.list_tables(ds):
                         tabs.setdefault(tb.table_id, f"{ds}.{tb.table_id}")
                 except Exception as e:
-                    print(ds, "không liệt kê được bảng:", repr(e)[:120])
-            print("bảng tìm thấy:", sorted(tabs))
+                    print(ds, "cannot list tables:", repr(e)[:120])
+            print("tables found:", sorted(tabs))
             tcx = next((v for k, v in tabs.items() if "chexpert" in k.lower()), None)
             tmeta = next((v for k, v in tabs.items() if "metadata" in k.lower()), None)
             if not tcx or not tmeta:
-                raise RuntimeError(f"Không tìm thấy bảng chexpert/metadata trên BigQuery: {sorted(tabs)}. Gửi thông báo này cho Claude.")
+                raise RuntimeError(f"CheXpert/metadata tables not found on BigQuery: {sorted(tabs)}. Please report this message.")
             cxs = bq(f"SELECT * FROM `{tcx}` WHERE subject_id IN UNNEST(@s)", P_S)
             meta = bq(f"SELECT dicom_id, subject_id, study_id FROM `{tmeta}` WHERE subject_id IN UNNEST(@s)", P_S)
             cxs.columns = [{c.lower().replace(" ", "_"): c for c in CX_COLS}.get(c.lower(), c) for c in cxs.columns]
             src = {"source": "bigquery", "chexpert_table": tcx, "metadata_table": tmeta}
     meta = meta.rename(columns={"dicom_id": "dicom"})
     mp = df[["dicom", "subject_id"]].merge(meta[["dicom", "study_id"]], on="dicom", how="left")
-    assert mp.study_id.notna().all(), f"{int(mp.study_id.isna().sum())} ảnh không có study_id trong metadata"
+    assert mp.study_id.notna().all(), f"{int(mp.study_id.isna().sum())} radiographs without study_id in the metadata"
     missing_cols = [c for c in CX_COLS if c not in cxs.columns]
-    assert not missing_cols, f"file chexpert thiếu cột {missing_cols}"
+    assert not missing_cols, f"CheXpert file is missing columns {missing_cols}"
     cxs = cxs[cxs.study_id.isin(set(mp.study_id))][["subject_id", "study_id"] + CX_COLS]
     atomic_to_csv(mp, MAPF); atomic_to_csv(cxs, LABF); atomic_json(src, CX_SRC)
 mp = pd.read_csv(MAPF); cxs = pd.read_csv(LABF)
@@ -177,7 +177,7 @@ table = r'''# %%
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
-assert posm.notna().all(), f"{int(posm.isna().sum())} ảnh không có embedding RAD-DINO"
+assert posm.notna().all(), f"{int(posm.isna().sum())} radiographs without a RAD-DINO embedding"
 EMB = [f"raddino_{j}" for j in range(E.shape[1])]
 HIST_A = [f"hist_{t}" for t in TARGETS]; HIST_C = [f"histcln_{t}" for t in TARGETS]
 rec = pd.concat([df[["dataset_position", "subject_id"] + EHR + IMG].reset_index(drop=True),
@@ -203,9 +203,9 @@ np.savez(CACHE / f"{V}_labels.npz", **{f"cx__{t}": img[t].values.astype(np.int8)
 atomic_to_csv(img[["dataset_position", "subject_id", "dicom"] + TARGETS_CX], DIRS["labels"] / f"{V}_chexpert_image_labels.csv.gz")
 
 if V2_FOLDS and os.path.exists(V2_FOLDS):
-    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: đọc từ", V2_FOLDS)
+    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: read from", V2_FOLDS)
 else:
-    print("P2 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P2 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     Ys = S[TARGETS].values; parts = []
     for k, (tr, te) in enumerate(MultilabelStratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(np.zeros(len(Ys)), Ys)):
         itr, iva = next(MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42 * 100 + k).split(np.zeros(len(tr)), Ys[tr]))
@@ -213,9 +213,9 @@ else:
         parts.append(pd.DataFrame({"subject_id": S.index.values, "fold": k, "role": role}))
     m2 = pd.concat(parts, ignore_index=True)
 if V2_RECFOLDS and os.path.exists(V2_RECFOLDS):
-    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: đọc từ", V2_RECFOLDS)
+    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: read from", V2_RECFOLDS)
 else:
-    print("P1 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P1 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     Yr = df[TARGETS].values; parts = []
     for k, (tr, te) in enumerate(MultilabelStratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(np.zeros(len(Yr)), Yr)):
         itr, iva = next(MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42 * 100 + k).split(np.zeros(len(tr)), Yr[tr]))
@@ -265,7 +265,7 @@ for p, cfg in PROTO.items():
             for ft in [f for f in G_FEATS if f in cfg.get("feats", G_FEATS)]:
                 TASKS.append((p, k, ft, t))
 atomic_to_csv(pd.DataFrame(skipped, columns=["protocol", "fold", "target", "pos_tr", "pos_va", "pos_te"]), DIRS["manifests"] / f"{V}_skipped.csv")
-print(f"tasks {len(TASKS)} | skipped (quá ít ca dương) {len(skipped)}")
+print(f"tasks {len(TASKS)} | skipped (too few positives) {len(skipped)}")
 if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 

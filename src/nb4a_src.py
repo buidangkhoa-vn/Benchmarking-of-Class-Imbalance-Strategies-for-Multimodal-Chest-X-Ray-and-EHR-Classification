@@ -1,21 +1,21 @@
 # %% [markdown]
-# # STEP 4a (v3) — Trích 4 bảng MIMIC-IV từ BigQuery bằng TÀI KHOẢN CHÍNH
+# # STEP 4a (v3) — Extract four MIMIC-IV tables from BigQuery with the PhysioNet-credentialed account
 #
-# Chỉ dùng khi tài khoản chạy Colab Pro (STEP4b) **không** có quyền PhysioNet trên BigQuery và cách dán mã ở STEP4b bị lỗi.
+# Use only if the account that runs Colab (STEP4) has **no** PhysioNet access on BigQuery and the code-paste login in STEP4 fails.
 #
-# 1. Mở notebook này trên Colab **bằng tài khoản <your PhysioNet-credentialed Google account>** (tài khoản có quyền PhysioNet). Colab miễn phí là đủ, runtime CPU, ~5 phút.
-# 2. `GCP_PROJECT` đã điền sẵn `YOUR_GCP_PROJECT_ID` → **Run all**.
-# 3. Khi được hỏi, upload file `x_ray_and_features_data.csv` (trong `D:\project_TTNT_Data_aug\`); cửa sổ đăng nhập Google: chọn tài khoản chính, tick hết quyền.
-# 4. Cuối cùng trình duyệt tự tải về `v3_bq_extract.zip` (~10 MB).
-# 5. Upload file zip đó vào Google Drive **của tài khoản chạy STEP4b**, thư mục `MyDrive/data_aug/MMMDA_runs/` → mở STEP4b → Run all.
+# 1. Open this notebook in Colab **with <your PhysioNet-credentialed Google account>** (the account with PhysioNet access). Free Colab is enough; CPU runtime, ~5 min.
+# 2. Set `GCP_PROJECT` (placeholder `YOUR_GCP_PROJECT_ID`) → **Run all**.
+# 3. When prompted, upload `x_ray_and_features_data.csv`; in the Google sign-in window choose the credentialed account and grant all permissions.
+# 4. The browser then downloads `v3_bq_extract.zip` (~10 MB).
+# 5. Upload that zip to the Google Drive **of the account that runs STEP4**, folder `MyDrive/data_aug/MMMDA_runs/` → open STEP4 → Run all.
 #
-# Notebook không lưu gì lên Drive của tài khoản chính.
+# This notebook writes nothing to the Drive of the credentialed account.
 
 # %%
 # ============================== CELL 1 — CONTROL PANEL ==============================
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # project BigQuery của <your PhysioNet-credentialed Google account> (tài khoản có quyền PhysioNet)
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of <your PhysioNet-credentialed Google account>
 VERSION       = "v3_2026-10-19"
-BQ_AUTH       = "same_account"        # notebook này chạy bằng chính tài khoản có quyền -> cửa sổ đăng nhập thường
+BQ_AUTH       = "same_account"        # this notebook runs under the credentialed account itself -> standard sign-in window
 EXPECTED_HASH = "da85519958e4bccb"
 BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1_hosp"),
                  ("physionet-data.mimiciv_2_2_hosp", "physionet-data.mimiciv_2_2_hosp"),
@@ -42,7 +42,7 @@ if IN_COLAB:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "db-dtypes"], check=True)
     if not os.path.exists(CSV_PATH):
         from google.colab import files
-        print("Chọn file x_ray_and_features_data.csv (trong D:\\project_TTNT_Data_aug\\) để upload ...")
+        print("Select x_ray_and_features_data.csv to upload ...")
         up = files.upload()
         name = next(iter(up))
         if os.path.abspath(name) != CSV_PATH:
@@ -67,7 +67,7 @@ df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV khác file đã benchmark — DỪNG"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -94,7 +94,7 @@ if LOCAL_TEST and os.environ.get("V3_BQ_DIR"):
     if not BQ_SRC.exists():
         atomic_json({"hosp": "LOCAL_TEST", "core": "LOCAL_TEST"}, BQ_SRC)
 
-# (a) bảng đã được trích sẵn bằng STEP4a (tài khoản chính) -> chỉ cần giải nén
+# (a) tables already extracted with STEP4a (credentialed account) -> only unzip
 if not all(f.exists() for f in BQF.values()):
     for zp in [Path(OUT_ROOT) / f"{V}_bq_extract.zip", OUT / f"{V}_bq_extract.zip", Path(OUT_ROOT).parent / f"{V}_bq_extract.zip",
                Path("/content/drive/MyDrive") / f"{V}_bq_extract.zip", Path("/content") / f"{V}_bq_extract.zip"]:
@@ -106,19 +106,19 @@ if not all(f.exists() for f in BQF.values()):
                         tmp = DIRS["bq"] / (name + ".tmp")
                         with z.open(m) as fi, open(tmp, "wb") as fo: shutil.copyfileobj(fi, fo)
                         os.replace(tmp, DIRS["bq"] / name)
-            print("BigQuery: dùng bảng trích sẵn từ", zp); break
+            print("BigQuery: using tables extracted beforehand from", zp); break
 
-# (b) hỏi BigQuery trực tiếp
+# (b) query BigQuery directly
 if not all(f.exists() for f in BQF.values()):
     from google.cloud import bigquery
     project = GCP_PROJECT or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
     if not project:
-        raise RuntimeError("Chưa điền GCP_PROJECT ở CELL 1 (project id Google Cloud của tài khoản có quyền PhysioNet trên BigQuery).")
+        raise RuntimeError("GCP_PROJECT is empty in CELL 1 (Google Cloud project id of the account with PhysioNet access on BigQuery).")
     if BQ_AUTH == "other_account" and IN_COLAB:
         print("=" * 90)
-        print("ĐĂNG NHẬP BIGQUERY BẰNG TÀI KHOẢN CHÍNH (tài khoản có quyền PhysioNet):")
-        print(" 1) Bấm link hiện ra bên dưới -> chọn TÀI KHOẢN CHÍNH -> Allow / Cho phép")
-        print(" 2) Copy mã xác nhận hiện ra -> dán vào ô nhập bên dưới -> Enter")
+        print("SIGN IN TO BIGQUERY WITH THE CREDENTIALED ACCOUNT (the account with PhysioNet access):")
+        print(" 1) Open the link printed below -> choose the CREDENTIALED ACCOUNT -> Allow")
+        print(" 2) Copy the verification code -> paste it into the input box below -> Enter")
         print("=" * 90)
         from IPython import get_ipython
         get_ipython().system("gcloud auth application-default login --no-launch-browser "
@@ -126,8 +126,8 @@ if not all(f.exists() for f in BQF.values()):
         import google.auth
         adc = Path(os.environ.get("CLOUDSDK_CONFIG", str(Path.home() / ".config" / "gcloud"))) / "application_default_credentials.json"
         if not adc.exists():
-            raise RuntimeError("Đăng nhập tài khoản chính chưa thành công (không thấy credential). Chạy lại cell này; "
-                               "nếu vẫn lỗi, dùng notebook STEP4a bằng tài khoản chính.")
+            raise RuntimeError("Sign-in with the credentialed account failed (no credential found). Rerun this cell; "
+                               "if it still fails, use notebook STEP4a with the credentialed account.")
         creds, _ = google.auth.load_credentials_from_file(str(adc), scopes=["https://www.googleapis.com/auth/cloud-platform"])
         client = bigquery.Client(project=project, credentials=creds)
     else:
@@ -139,10 +139,10 @@ if not all(f.exists() for f in BQF.values()):
         cfg = bigquery.QueryJobConfig(query_parameters=list(params))
         return client.query(sql, job_config=cfg).to_dataframe(create_bqstorage_client=False)   # REST download: works in BigQuery Sandbox
     try:
-        print("BigQuery đang dùng tài khoản:", bq("SELECT SESSION_USER() AS u").u.iloc[0])
+        print("BigQuery is using account:", bq("SELECT SESSION_USER() AS u").u.iloc[0])
     except Exception as e:
-        raise RuntimeError(f"Không chạy được truy vấn BigQuery với project '{project}': {repr(e)[:300]}\n"
-                           "Kiểm tra: GCP_PROJECT có thuộc tài khoản vừa đăng nhập không, BigQuery API đã bật chưa.")
+        raise RuntimeError(f"BigQuery query failed with project '{project}': {repr(e)[:300]}\n"
+                           "Check that GCP_PROJECT belongs to the account that just signed in and that the BigQuery API is enabled.")
     P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS)]
     P_H = [bigquery.ArrayQueryParameter("h", "INT64", HIDS)]
     # --- discover extra candidate datasets (may be forbidden; that is fine) ---
@@ -153,7 +153,7 @@ if not all(f.exists() for f in BQF.values()):
             if re.match(r"mimiciv_.*hosp$", n) and ("physionet-data." + n, "physionet-data." + n) not in cands:
                 cands.insert(0, ("physionet-data." + n, "physionet-data." + n))
     except Exception as e:
-        print("list_datasets không được phép (bỏ qua):", repr(e)[:120])
+        print("list_datasets not permitted (skipped):", repr(e)[:120])
     # --- pick the dataset whose admissions match our hadm_id + admission date ---
     checks, errs = [], []
     our = df.set_index("hadm_id")
@@ -171,15 +171,15 @@ if not all(f.exists() for f in BQF.values()):
             if found > 0.999 and date_ok > 0.99:
                 break
         except Exception as e:
-            errs.append(f"{core}: {repr(e)[:200]}"); print(f"{core}: không dùng được ({repr(e)[:150]})")
+            errs.append(f"{core}: {repr(e)[:200]}"); print(f"{core}: not usable ({repr(e)[:150]})")
     ok = [c for c in checks if c["found"] > 0.98 and max(c["date_match"], c["study_in_admission"]) > 0.95]
     if not ok:
-        hint = ("\nNếu lỗi là 403/Access Denied: tài khoản Google đang đăng nhập chưa được cấp quyền physionet-data trên BigQuery "
-                "(physionet.org → trang MIMIC-IV → 'Request access using Google BigQuery'), hoặc GCP_PROJECT sai.")
-        raise RuntimeError(f"Không dataset BigQuery nào khớp cohort.\nchecks={checks}\nerrors={errs}{hint}\nGửi toàn bộ thông báo này cho Claude.")
+        hint = ("\nIf the error is 403/Access Denied: the signed-in Google account has no access to physionet-data on BigQuery "
+                "(physionet.org → MIMIC-IV page → 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
+        raise RuntimeError(f"No BigQuery dataset matches the cohort.\nchecks={checks}\nerrors={errs}{hint}\nPlease report this full message.")
     src = max(ok, key=lambda c: (c["found"], c["date_match"], c["study_in_admission"]))
     hosp, core = src["hosp"], src["core"]
-    print("==> dùng", hosp, "/", core)
+    print("==> using", hosp, "/", core)
     t0 = time.time()
     adm = bq(f"SELECT subject_id, hadm_id, admittime, dischtime, admission_type FROM `{core}.admissions` WHERE subject_id IN UNNEST(@s)", P_S)
     pts = bq(f"SELECT subject_id, gender, anchor_age, anchor_year, anchor_year_group FROM `{core}.patients` WHERE subject_id IN UNNEST(@s)", P_S)
@@ -190,16 +190,16 @@ if not all(f.exists() for f in BQF.values()):
     atomic_json({**src, "checks": checks, "project": project, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "seconds": round(time.time() - t0, 1)}, BQ_SRC)
 else:
-    print("BigQuery: dùng bản đã lưu trên Drive", json.load(open(BQ_SRC)).get("hosp"))
+    print("BigQuery: using the copy saved on Drive", json.load(open(BQ_SRC)).get("hosp"))
 
 adm = pd.read_csv(BQF["admissions"], parse_dates=["admittime", "dischtime"])
 pts = pd.read_csv(BQF["patients"])
 dxs = pd.read_csv(BQF["diagnoses"], dtype={"icd_code": str})
 tit = pd.read_csv(BQF["icd_titles"], dtype={"icd_code": str})
 dxs["icd_code"] = dxs.icd_code.str.strip(); tit["icd_code"] = tit.icd_code.str.strip()
-assert set(SIDS) <= set(pts.subject_id), "thiếu bệnh nhân trong patients"
+assert set(SIDS) <= set(pts.subject_id), "patients missing from the patients table"
 miss_h = set(HIDS) - set(adm.hadm_id)
-assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} hadm_id của cohort không có trong admissions"
+assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} cohort hadm_id values not found in admissions"
 print(f"admissions {len(adm)} (cohort subjects, all admissions) | diagnoses {len(dxs)} | titles {len(tit)}")
 
 # %%
@@ -209,8 +209,8 @@ with zipfile.ZipFile(str(ZIP) + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
     for f in list(BQF.values()) + [BQ_SRC]:
         z.write(f, f.name)
 os.replace(str(ZIP) + ".tmp", ZIP)
-print(f"XONG: {ZIP.name} ({ZIP.stat().st_size / 1e6:.1f} MB)")
-print("-> Upload file này vào Google Drive của tài khoản chạy STEP4b, thư mục MyDrive/data_aug/MMMDA_runs/ rồi Run all STEP4b.")
+print(f"DONE: {ZIP.name} ({ZIP.stat().st_size / 1e6:.1f} MB)")
+print("-> Upload this file to the Google Drive of the account that runs STEP4, folder MyDrive/data_aug/MMMDA_runs/, then Run all in STEP4.")
 if IN_COLAB:
     from google.colab import files
     files.download(str(ZIP))

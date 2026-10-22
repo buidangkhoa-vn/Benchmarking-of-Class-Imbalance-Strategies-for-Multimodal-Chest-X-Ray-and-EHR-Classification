@@ -194,7 +194,7 @@ else:
     print("no view metadata — patient-level image features use all radiographs")
 
 if REQUIRE_EMBEDDINGS and len(EMB_COLS) < len(EMBEDDINGS):
-    raise RuntimeError("Chưa có embedding của NB2 (emb.npy). Hãy chạy NB2 với RUN_MODE='full' cho xong rồi Run all lại notebook này.")
+    raise RuntimeError("NB2 embeddings (emb.npy) not found. Run NB2 with RUN_MODE='full' to completion, then Run all in this notebook again.")
 IMG_ALL_COLS = IMG + sum(EMB_COLS.values(), [])
 agg = {c: "first" for c in TARGETS + EHR}
 pat = rec.groupby("subject_id").agg(agg)
@@ -566,7 +566,7 @@ if ROLE != "final":
         pbar.set_postfix(new_jobs=tot_new, errors=tot_err)
     print(f"stage B done in {(time.time() - t0) / 60:.1f} min | new jobs {tot_new} | errors {tot_err}")
     if ROLE == "worker":
-        print(f"\n>>> WORKER {WORKER_INDEX} XONG. Khi cả {N_WORKERS} worker đều xong, mở notebook FINAL và Run all.")
+        print(f"\n>>> WORKER {WORKER_INDEX} DONE. When all {N_WORKERS} workers are done, open the FINAL notebook and Run all.")
 
 # %%
 # ============================== CELL 11 — BASELINES (trivial + EHR lookup table) ==============================
@@ -625,9 +625,9 @@ if len(missing):
     by_w = missing.map(_worker_of).value_counts().sort_index()
     print("missing examples:", missing.head(5).tolist())
     for w, n in by_w.items():
-        print(f"  worker {w}: còn thiếu {n} job -> mở lại notebook worker {w} và Run all (tự chạy tiếp phần còn thiếu)")
+        print(f"  worker {w}: {n} jobs missing -> reopen worker notebook {w} and Run all (it resumes the missing part)")
     if ROLE == "worker":
-        print("  (nếu các worker khác vẫn đang chạy thì thiếu job của họ là bình thường)")
+        print("  (missing jobs of workers that are still running are expected)")
 if len(ERR):
     print(ERR[["job_key", "error"]].head(20).to_string())
 if len(R):
@@ -850,12 +850,12 @@ def run_analysis():
 if ROLE in ("final", "single"):
     run_analysis()
 else:
-    print("ROLE = worker: phần phân tích chạy trong notebook FINAL")
+    print("ROLE = worker: the analysis runs in the FINAL notebook")
 
 # %%
-# ============================== CELL 14 — FLUSH TO DRIVE (bắt buộc trước khi đóng tab) ==============================
+# ============================== CELL 14 — FLUSH TO DRIVE (required before closing the session) ==============================
 if IN_COLAB and ROLE in ("worker", "final"):
-    print("Đang đẩy toàn bộ file lên Google Drive... ĐỪNG đóng tab cho tới khi thấy 'FLUSH XONG'.")
+    print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH XONG — đã có thể đóng tab.")
+    print("FLUSH DONE — the session can be closed.")

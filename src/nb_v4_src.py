@@ -1,63 +1,63 @@
 # %% [markdown]
-# # STEP 5 (v4) — Nhãn sửa theo đúng lần nhập viện (P1/P4/P5) — thay cho STEP4 v3
+# # STEP 5 (v4) — Admission-aligned labels (P1/P4/P5) — supersedes STEP4 v3
 #
-# **Vì sao có v4.** Kết quả v3 cho thấy nhãn trong `x_ray_and_features_data.csv` được tạo bằng cách dò từ khóa trong tên mã ICD
-# của **một** lần nhập viện, rồi nhãn + EHR của **dòng cuối cùng (theo thứ tự file) của mỗi bệnh nhân** bị chép sang mọi ảnh của
-# bệnh nhân đó. Quy tắc dựng lại khớp **10.477/10.479** bệnh nhân. Từ khóa thật: `pneumonia`, `tuberculosis`, `bronchitis`,
-# `arthritis`, `fracture`, `malignant neoplasm` (→ "lung_cancer" thực ra là *mọi* ung thư), `scoliosis`, tên mã kết thúc bằng
+# **Why v4.** The v3 results showed that the labels in `x_ray_and_features_data.csv` were created by keyword matching on the ICD titles
+# of **one** admission, after which the labels + EHR of **each patient's last row (in file order)** were copied to all radiographs of
+# that patient. The reconstructed rule matches **10,477/10,479** patients. Actual keywords: `pneumonia`, `tuberculosis`, `bronchitis`,
+# `arthritis`, `fracture`, `malignant neoplasm` (→ "lung_cancer" is in fact *any* cancer), `scoliosis`, and titles ending in
 # `infection` (→ "lung_infection").
 #
-# Notebook này (không đụng tới kết quả cũ):
-# 1. Dùng lại 4 bảng BigQuery đã trích ở v3 (không cần đăng nhập lại nếu thư mục v3 còn trên Drive).
-# 2. Kiểm tra lại quy tắc nhãn, đo mức sai lệch nhãn (bao nhiêu % ảnh mang nhãn của lần nhập viện khác, trước/sau).
-# 3. Gán **nhãn sửa** = chẩn đoán của **chính lần nhập viện có ảnh** cho cả 8 bệnh, rồi chạy:
-#    - `P1_admission`: chia theo ảnh như bài gốc (fold P1 của v2) — xem rò rỉ còn lại bao nhiêu khi nhãn đúng;
-#    - `P4_admission`: chia theo bệnh nhân (fold P2 của v2);
-#    - `P5_temporal` / `P5_temporal_adm`: chia theo năm thật (giống v3), nhãn cũ / nhãn sửa;
-#    - `P4_admission_clean`: như P4 nhưng bỏ các mã không phải chẩn đoán (tiền sử, sàng lọc, tiêm chủng, "without ...")
-#      và dùng định nghĩa đúng cho "lung cancer" (ung thư phổi/phế quản) và "lung infection" (nhiễm trùng phổi/hô hấp).
+# This notebook (earlier results are left untouched):
+# 1. Reuses the four BigQuery tables extracted in v3 (no new sign-in if the v3 folder is still on Drive).
+# 2. Re-checks the label rule and measures label misalignment (share of radiographs carrying another admission's label, earlier/later).
+# 3. Assigns **admission-aligned labels** = diagnoses of **the radiograph's own admission** for all 8 targets, then runs:
+#    - `P1_admission`: record split as in the original design (v2 P1 folds) — how much leakage remains with aligned labels;
+#    - `P4_admission`: patient split (v2 P2 folds);
+#    - `P5_temporal` / `P5_temporal_adm`: calendar-time split (as in v3), released / admission-aligned labels;
+#    - `P4_admission_clean`: as P4 but without non-diagnostic codes (history, screening, vaccination, "without ...")
+#      and with correct definitions of "lung cancer" (lung/bronchus malignancy) and "lung infection" (lung/respiratory infection).
 #
-# **Cách chạy** — tài khoản phụ (Colab Pro), Runtime **CPU, High-RAM** → **Run all**. Không cần sửa gì.
-# - Nếu notebook không tìm thấy bảng v3, nó sẽ hỏi đăng nhập BigQuery như STEP4 (link → chọn <your PhysioNet-credentialed Google account> → dán mã).
-# - Ước tính ~90–110 phút với 8 core. Rớt kết nối: Run all lại (tự bỏ qua phần đã xong).
-# - Xong khi thấy `FLUSH XONG`. Tải **một file** `v4_for_claude.zip` (đường dẫn in ở cuối) về `D:\project_TTNT_Data_aug\analysis_v4\`.
+# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** → **Run all**. Nothing to edit.
+# - If the v3 tables are not found, the notebook asks for a BigQuery sign-in as in STEP4 (link → choose <your PhysioNet-credentialed Google account> → paste the code).
+# - Expected time ~90–110 min with 8 cores. If the session drops: Run all again (finished tasks are skipped).
+# - Done when `FLUSH DONE` appears. The summary archive `v4_for_claude.zip` is written to the output folder (path printed at the end).
 #
-# Mọi thư mục/file notebook tạo ra đều có tiền tố phiên bản `v4`.
+# Every folder/file this notebook creates carries the version prefix `v4`.
 
 # %%
 # ============================== CELL 1 — CONTROL PANEL ==============================
-RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 bệnh, thư mục riêng)
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # project BigQuery của tài khoản có quyền PhysioNet (<your PhysioNet-credentialed Google account>)
-BQ_AUTH       = "other_account"       # "other_account": đăng nhập BigQuery bằng tài khoản khác với tài khoản đang chạy Colab
-                                      #                  (dán mã xác nhận; chọn tài khoản chính có quyền PhysioNet)
-                                      # "same_account" : tài khoản đang chạy Colab cũng chính là tài khoản có quyền PhysioNet
-VERSION       = "v4_2026-10-19"       # tag phiên bản: có trong tên mọi thư mục/file tạo ra
+RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of the account with PhysioNet access (<your PhysioNet-credentialed Google account>)
+BQ_AUTH       = "other_account"       # "other_account": sign in to BigQuery with a different account than the one running Colab
+                                      #                  (paste a verification code; choose the account with PhysioNet access)
+                                      # "same_account" : the account running Colab is the account with PhysioNet access
+VERSION       = "v4_2026-10-19"       # version tag: part of every folder/file name this notebook creates
 
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
 CSV_PATH      = f"{DRIVE_ROOT}/x_ray_and_features_data.csv"
 EXPECTED_HASH = "da85519958e4bccb"
-RADDINO_DIR   = f"{DRIVE_ROOT}/embeddings/raddino"                       # output của STEP1 (NB2)
-V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # fold P2 (chỉ đọc)
-V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # fold P1 (chỉ đọc)
-PREV_BQ_DIRS  = [f"{DRIVE_ROOT}/MMMDA_runs/v3_2026-10-19_P4P5/v3_bq"]    # bảng BigQuery đã trích ở v3 (dùng lại)
+RADDINO_DIR   = f"{DRIVE_ROOT}/embeddings/raddino"                       # output of STEP1 (NB2)
+V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # P2 folds (read only)
+V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # P1 folds (read only)
+PREV_BQ_DIRS  = [f"{DRIVE_ROOT}/MMMDA_runs/v3_2026-10-19_P4P5/v3_bq"]    # BigQuery tables extracted in v3 (reused)
 OUT_ROOT      = f"{DRIVE_ROOT}/MMMDA_runs"                               # -> MMMDA_runs/v4_2026-10-19_admlabels/
 LOCAL_CACHE   = "/content/mmmda_v4_cache"
 LOCAL_OUT     = "/content/mmmda_v4_out"
 
-# BigQuery datasets thử lần lượt (tự chọn cái khớp hadm_id + ngày nhập viện của cohort)
+# BigQuery datasets tried in turn (the one matching the cohort's hadm_id + admission dates is selected automatically)
 BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1_hosp"),
                  ("physionet-data.mimiciv_2_2_hosp", "physionet-data.mimiciv_2_2_hosp"),
                  ("physionet-data.mimiciv_hosp",     "physionet-data.mimiciv_hosp"),
                  ("physionet-data.mimiciv_3_0_hosp", "physionet-data.mimiciv_3_0_hosp"),
                  ("physionet-data.mimic_hosp",       "physionet-data.mimic_core")]    # (hosp: diagnoses, core: admissions/patients)
 
-N_PAR         = None                  # số process song song; None = tất cả core
+N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
 # ============================== CELL 2 — INSTALL + MOUNT ==============================
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
-LOCAL_TEST = os.environ.get("V3_LOCAL_TEST") == "1"           # chỉ dùng cho test offline
+LOCAL_TEST = os.environ.get("V3_LOCAL_TEST") == "1"           # offline test only
 if LOCAL_TEST:
     CSV_PATH = os.environ["V3_CSV"]; OUT_ROOT = os.environ["V3_OUT"]; LOCAL_CACHE = os.environ["V3_CACHE"]
     LOCAL_OUT = LOCAL_CACHE + "_out"; RADDINO_DIR = os.environ["V3_EMB"]; V2_FOLDS = os.environ.get("V3_V2FOLDS", "")
@@ -126,7 +126,7 @@ df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV khác file đã benchmark — DỪNG"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -153,7 +153,7 @@ if LOCAL_TEST and os.environ.get("V3_BQ_DIR"):
     if not BQ_SRC.exists():
         atomic_json({"hosp": "LOCAL_TEST", "core": "LOCAL_TEST"}, BQ_SRC)
 
-# (0) dùng lại bảng đã trích ở lần chạy trước (v3) nếu còn trên Drive
+# (0) reuse the tables extracted in the previous run (v3) if they are still on Drive
 if not all(f.exists() for f in BQF.values()):
     for pdir in PREV_BQ_DIRS:
         pdir = Path(pdir)
@@ -164,9 +164,9 @@ if not all(f.exists() for f in BQF.values()):
             js = sorted(pdir.glob("*_bq_source.json"))
             info = json.load(open(js[0])) if js else {}
             atomic_json({**info, "copied_from": str(pdir)}, BQ_SRC)
-            print("BigQuery: dùng lại bảng đã trích ở", pdir); break
+            print("BigQuery: reusing the tables extracted in", pdir); break
 
-# (a) bảng đã được trích sẵn bằng STEP4a (tài khoản chính) -> chỉ cần giải nén
+# (a) tables already extracted with STEP4a (credentialed account) -> only unzip
 if not all(f.exists() for f in BQF.values()):
     for zp in [Path(OUT_ROOT) / f"{V}_bq_extract.zip", OUT / f"{V}_bq_extract.zip", Path(OUT_ROOT).parent / f"{V}_bq_extract.zip",
                Path("/content/drive/MyDrive") / f"{V}_bq_extract.zip", Path("/content") / f"{V}_bq_extract.zip"]:
@@ -178,19 +178,19 @@ if not all(f.exists() for f in BQF.values()):
                         tmp = DIRS["bq"] / (name + ".tmp")
                         with z.open(m) as fi, open(tmp, "wb") as fo: shutil.copyfileobj(fi, fo)
                         os.replace(tmp, DIRS["bq"] / name)
-            print("BigQuery: dùng bảng trích sẵn từ", zp); break
+            print("BigQuery: using tables extracted beforehand from", zp); break
 
-# (b) hỏi BigQuery trực tiếp
+# (b) query BigQuery directly
 if not all(f.exists() for f in BQF.values()):
     from google.cloud import bigquery
     project = GCP_PROJECT or os.environ.get("GOOGLE_CLOUD_PROJECT", "")
     if not project:
-        raise RuntimeError("Chưa điền GCP_PROJECT ở CELL 1 (project id Google Cloud của tài khoản có quyền PhysioNet trên BigQuery).")
+        raise RuntimeError("GCP_PROJECT is empty in CELL 1 (Google Cloud project id of the account with PhysioNet access on BigQuery).")
     if BQ_AUTH == "other_account" and IN_COLAB:
         print("=" * 90)
-        print("ĐĂNG NHẬP BIGQUERY BẰNG TÀI KHOẢN CHÍNH (tài khoản có quyền PhysioNet):")
-        print(" 1) Bấm link hiện ra bên dưới -> chọn TÀI KHOẢN CHÍNH -> Allow / Cho phép")
-        print(" 2) Copy mã xác nhận hiện ra -> dán vào ô nhập bên dưới -> Enter")
+        print("SIGN IN TO BIGQUERY WITH THE CREDENTIALED ACCOUNT (the account with PhysioNet access):")
+        print(" 1) Open the link printed below -> choose the CREDENTIALED ACCOUNT -> Allow")
+        print(" 2) Copy the verification code -> paste it into the input box below -> Enter")
         print("=" * 90)
         from IPython import get_ipython
         get_ipython().system("gcloud auth application-default login --no-launch-browser "
@@ -198,8 +198,8 @@ if not all(f.exists() for f in BQF.values()):
         import google.auth
         adc = Path(os.environ.get("CLOUDSDK_CONFIG", str(Path.home() / ".config" / "gcloud"))) / "application_default_credentials.json"
         if not adc.exists():
-            raise RuntimeError("Đăng nhập tài khoản chính chưa thành công (không thấy credential). Chạy lại cell này; "
-                               "nếu vẫn lỗi, dùng notebook STEP4a bằng tài khoản chính.")
+            raise RuntimeError("Sign-in with the credentialed account failed (no credential found). Rerun this cell; "
+                               "if it still fails, use notebook STEP4a with the credentialed account.")
         creds, _ = google.auth.load_credentials_from_file(str(adc), scopes=["https://www.googleapis.com/auth/cloud-platform"])
         client = bigquery.Client(project=project, credentials=creds)
     else:
@@ -211,10 +211,10 @@ if not all(f.exists() for f in BQF.values()):
         cfg = bigquery.QueryJobConfig(query_parameters=list(params))
         return client.query(sql, job_config=cfg).to_dataframe(create_bqstorage_client=False)   # REST download: works in BigQuery Sandbox
     try:
-        print("BigQuery đang dùng tài khoản:", bq("SELECT SESSION_USER() AS u").u.iloc[0])
+        print("BigQuery is using account:", bq("SELECT SESSION_USER() AS u").u.iloc[0])
     except Exception as e:
-        raise RuntimeError(f"Không chạy được truy vấn BigQuery với project '{project}': {repr(e)[:300]}\n"
-                           "Kiểm tra: GCP_PROJECT có thuộc tài khoản vừa đăng nhập không, BigQuery API đã bật chưa.")
+        raise RuntimeError(f"BigQuery query failed with project '{project}': {repr(e)[:300]}\n"
+                           "Check that GCP_PROJECT belongs to the account that just signed in and that the BigQuery API is enabled.")
     P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS)]
     P_H = [bigquery.ArrayQueryParameter("h", "INT64", HIDS)]
     # --- discover extra candidate datasets (may be forbidden; that is fine) ---
@@ -225,7 +225,7 @@ if not all(f.exists() for f in BQF.values()):
             if re.match(r"mimiciv_.*hosp$", n) and ("physionet-data." + n, "physionet-data." + n) not in cands:
                 cands.insert(0, ("physionet-data." + n, "physionet-data." + n))
     except Exception as e:
-        print("list_datasets không được phép (bỏ qua):", repr(e)[:120])
+        print("list_datasets not permitted (skipped):", repr(e)[:120])
     # --- pick the dataset whose admissions match our hadm_id + admission date ---
     checks, errs = [], []
     our = df.set_index("hadm_id")
@@ -243,15 +243,15 @@ if not all(f.exists() for f in BQF.values()):
             if found > 0.999 and date_ok > 0.99:
                 break
         except Exception as e:
-            errs.append(f"{core}: {repr(e)[:200]}"); print(f"{core}: không dùng được ({repr(e)[:150]})")
+            errs.append(f"{core}: {repr(e)[:200]}"); print(f"{core}: not usable ({repr(e)[:150]})")
     ok = [c for c in checks if c["found"] > 0.98 and max(c["date_match"], c["study_in_admission"]) > 0.95]
     if not ok:
-        hint = ("\nNếu lỗi là 403/Access Denied: tài khoản Google đang đăng nhập chưa được cấp quyền physionet-data trên BigQuery "
-                "(physionet.org → trang MIMIC-IV → 'Request access using Google BigQuery'), hoặc GCP_PROJECT sai.")
-        raise RuntimeError(f"Không dataset BigQuery nào khớp cohort.\nchecks={checks}\nerrors={errs}{hint}\nGửi toàn bộ thông báo này cho Claude.")
+        hint = ("\nIf the error is 403/Access Denied: the signed-in Google account has no access to physionet-data on BigQuery "
+                "(physionet.org → MIMIC-IV page → 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
+        raise RuntimeError(f"No BigQuery dataset matches the cohort.\nchecks={checks}\nerrors={errs}{hint}\nPlease report this full message.")
     src = max(ok, key=lambda c: (c["found"], c["date_match"], c["study_in_admission"]))
     hosp, core = src["hosp"], src["core"]
-    print("==> dùng", hosp, "/", core)
+    print("==> using", hosp, "/", core)
     t0 = time.time()
     adm = bq(f"SELECT subject_id, hadm_id, admittime, dischtime, admission_type FROM `{core}.admissions` WHERE subject_id IN UNNEST(@s)", P_S)
     pts = bq(f"SELECT subject_id, gender, anchor_age, anchor_year, anchor_year_group FROM `{core}.patients` WHERE subject_id IN UNNEST(@s)", P_S)
@@ -262,16 +262,16 @@ if not all(f.exists() for f in BQF.values()):
     atomic_json({**src, "checks": checks, "project": project, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "seconds": round(time.time() - t0, 1)}, BQ_SRC)
 else:
-    print("BigQuery: dùng bản đã lưu trên Drive", json.load(open(BQ_SRC)).get("hosp"))
+    print("BigQuery: using the copy saved on Drive", json.load(open(BQ_SRC)).get("hosp"))
 
 adm = pd.read_csv(BQF["admissions"], parse_dates=["admittime", "dischtime"])
 pts = pd.read_csv(BQF["patients"])
 dxs = pd.read_csv(BQF["diagnoses"], dtype={"icd_code": str})
 tit = pd.read_csv(BQF["icd_titles"], dtype={"icd_code": str})
 dxs["icd_code"] = dxs.icd_code.str.strip(); tit["icd_code"] = tit.icd_code.str.strip()
-assert set(SIDS) <= set(pts.subject_id), "thiếu bệnh nhân trong patients"
+assert set(SIDS) <= set(pts.subject_id), "patients missing from the patients table"
 miss_h = set(HIDS) - set(adm.hadm_id)
-assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} hadm_id của cohort không có trong admissions"
+assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} cohort hadm_id values not found in admissions"
 print(f"admissions {len(adm)} (cohort subjects, all admissions) | diagnoses {len(dxs)} | titles {len(tit)}")
 
 # %%
@@ -319,7 +319,7 @@ for t in TARGETS:
     print(f"[{t}] {len(g)} titles; top: " + "; ".join(f"{x[:38]} ({n})" for x, n in g.head(4).items()))
 atomic_to_csv(pd.DataFrame(trows), DIRS["labels"] / f"{V}_label_rule_titles.csv")
 if match_last.mean() < 0.99:
-    raise RuntimeError(f"Quy tắc nhãn chỉ khớp {match_last.mean():.3f} bệnh nhân (<0.99) — dừng, gửi output cho Claude.")
+    raise RuntimeError(f"The label rule matches only {match_last.mean():.3f} of patients (<0.99) — stopping; please report the output.")
 P4_TARGETS = list(TARGETS)
 
 # ---- clinically cleaned label definition (own design; used only for P4_admission_clean) ----
@@ -412,7 +412,7 @@ pt = pts.drop_duplicates("subject_id").set_index("subject_id")
 g0 = pt.anchor_year_group.astype(str).str.extract(r"(\d{4})")[0].astype(float)
 img["est_year"] = (img.subject_id.map(g0) + 1 + (img.study_year - img.subject_id.map(pt.anchor_year))).astype(float)
 first_year = img.groupby("subject_id").est_year.min()
-assert first_year.notna().all(), f"{int(first_year.isna().sum())} bệnh nhân thiếu anchor_year_group"
+assert first_year.notna().all(), f"{int(first_year.isna().sum())} patients without anchor_year_group"
 order = sorted(S.index, key=lambda s: (first_year[s], stable_hash(f"v3|{s}")))
 n = len(order); n_tr, n_va = int(round(0.64 * n)), int(round(0.16 * n))
 role5 = pd.Series("test", index=order); role5.iloc[:n_tr] = "train"; role5.iloc[n_tr:n_tr + n_va] = "val"
@@ -429,7 +429,7 @@ print(p5_report.to_string())
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
-assert posm.notna().all(), f"{int(posm.isna().sum())} ảnh không có embedding RAD-DINO"
+assert posm.notna().all(), f"{int(posm.isna().sum())} radiographs without a RAD-DINO embedding"
 EMB = [f"raddino_{j}" for j in range(E.shape[1])]
 rec = pd.concat([df[["dataset_position", "subject_id"] + EHR + IMG].reset_index(drop=True),
                  pd.DataFrame(E[posm.astype(int).values], columns=EMB)], axis=1)
@@ -447,9 +447,9 @@ np.savez(CACHE / f"{V}_labels.npz", **{f"subj__{t}": img[t].values.astype(np.int
 
 # P2 folds (exactly the v2 manifest; rebuilt deterministically if the file is not reachable)
 if V2_FOLDS and os.path.exists(V2_FOLDS):
-    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: đọc từ", V2_FOLDS)
+    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: read from", V2_FOLDS)
 else:
-    print("P2 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P2 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     Ys = S[TARGETS].values; parts = []
     for k, (tr, te) in enumerate(MultilabelStratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(np.zeros(len(Ys)), Ys)):
         itr, iva = next(MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42 * 100 + k).split(np.zeros(len(tr)), Ys[tr]))
@@ -459,9 +459,9 @@ else:
 atomic_to_csv(m2, DIRS["manifests"] / f"{V}_folds_P2_subject_s42_copy.csv")
 # P1 record folds (exactly the v2 manifest; rebuilt deterministically if missing)
 if V2_RECFOLDS and os.path.exists(V2_RECFOLDS):
-    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: đọc từ", V2_RECFOLDS)
+    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: read from", V2_RECFOLDS)
 else:
-    print("P1 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P1 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     Yr = df[TARGETS].values; parts = []
     for k, (tr, te) in enumerate(MultilabelStratifiedKFold(n_splits=5, shuffle=True, random_state=42).split(np.zeros(len(Yr)), Yr)):
         itr, iva = next(MultilabelStratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42 * 100 + k).split(np.zeros(len(tr)), Yr[tr]))
@@ -515,7 +515,7 @@ for p, cfg in PROTO.items():
             for ft in [f for f in G_FEATS if f in cfg.get("feats", G_FEATS)]:
                 TASKS.append((p, k, ft, t))
 atomic_to_csv(pd.DataFrame(skipped, columns=["protocol", "fold", "target", "pos_tr", "pos_va", "pos_te"]), DIRS["manifests"] / f"{V}_skipped.csv")
-print(f"tasks {len(TASKS)} | skipped (quá ít ca dương) {len(skipped)}")
+print(f"tasks {len(TASKS)} | skipped (too few positives) {len(skipped)}")
 if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
@@ -626,7 +626,7 @@ def task_done(task):
     p, k, ft, t = task; tag = f"{p}__f{k}__{ft}__{t}"
     return (DIRS["results"] / f"{V}_{tag}.csv").exists() and (DIRS["preds"] / f"{V}_{tag}.npz").exists()
 TODO = [t for t in TASKS if not task_done(t)]
-print(f"tasks đã xong từ lần chạy trước: {len(TASKS) - len(TODO)} | còn lại: {len(TODO)}")
+print(f"tasks finished in earlier sessions: {len(TASKS) - len(TODO)} | remaining: {len(TODO)}")
 prep_keys = sorted({(PROTO[p]["split"], k, ft) for p, k, ft, t in TODO})
 t0 = time.time()
 Parallel(n_jobs=min(NP, max(1, len(prep_keys))))(delayed(prep_task)(k, str(CACHE), FEATSETS, EMB_PCA_DIM) for k in tqdm(prep_keys, desc="preprocess"))
@@ -634,7 +634,7 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 n_fits = sum(len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TASKS)
 sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15}
 eta = sum(sec[ft] * len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TODO) / NP / 60
-print(f"model fits: {n_fits} | ETA ≈ {eta:.0f} phút với {NP} core")
+print(f"model fits: {n_fits} | ETA ≈ {eta:.0f} min with {NP} cores")
 
 # %%
 # ============================== CELL 12 — STAGE B: MODELS (resume-safe: 2 files per task on Drive) ==============================
@@ -752,7 +752,7 @@ if "P1_admission" in set(R.protocol):
     TC = P1r.groupby(["feature_set", "target"])[["test_f2", "seen_f2", "unseen_f2", "unseen_trivial_f2", "seen_n", "unseen_n"]].mean()
     atomic_to_csv(TC.reset_index().round(4), DIRS["analysis"] / f"{V}_tableC_P1adm_seen_unseen.csv")
     print("\nP1_admission — seen vs unseen patients (macro)\n", TC.groupby("feature_set").mean().round(3).to_string())
-print("\nMACRO (config chọn theo inner-val F2)\n", TA.round(3).to_string())
+print("\nMACRO (configuration selected on inner-validation F2)\n", TA.round(3).to_string())
 
 # --- patient-cluster bootstrap for the single temporal split (P5) ---
 rng = np.random.default_rng(42); B = 1000; boot_rows = []
@@ -784,7 +784,7 @@ for p in [p for p in PROTO if PROTO[p]["split"] == "P5" and p in set(best.protoc
 BOOT = pd.DataFrame(boot_rows)
 if len(BOOT):
     atomic_to_csv(BOOT.round(4), DIRS["analysis"] / f"{V}_P5_bootstrap.csv")
-    print("\nP5 (1 split theo thời gian) — macro F2, 95% CI bootstrap theo bệnh nhân\n", BOOT.round(3).to_string(index=False))
+    print("\nP5 (single calendar-time split) — macro F2, 95% CI from patient-level bootstrap\n", BOOT.round(3).to_string(index=False))
 
 numbers = {"version": VERSION, "data_hash": data_hash, "bq_source": json.load(open(BQ_SRC)),
            "label_reconstruction": RECON.round(4).to_dict("records"), "label_reconstruction_summary": recon_summary,
@@ -806,12 +806,12 @@ with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
                 z.write(f, f"{OUT.name}/{DIRS[d].name}/{f.name}")
     z.write(BQ_SRC, f"{OUT.name}/{DIRS['bq'].name}/{BQ_SRC.name}")
 os.replace(tmpz, ZIP)
-print("\nFILE CẦN TẢI:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
+print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 15 — FLUSH TO DRIVE (bắt buộc trước khi đóng tab) ==============================
+# ============================== CELL 15 — FLUSH TO DRIVE (required before closing the session) ==============================
 if IN_COLAB:
-    print("Đang đẩy toàn bộ file lên Google Drive... ĐỪNG đóng tab cho tới khi thấy 'FLUSH XONG'.")
+    print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH XONG — tải file", ZIP.name, "trong thư mục", OUT)
+    print("FLUSH DONE — download", ZIP.name, "from", OUT)

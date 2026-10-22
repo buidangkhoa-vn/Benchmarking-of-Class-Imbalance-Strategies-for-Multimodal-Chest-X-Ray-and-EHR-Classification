@@ -68,9 +68,9 @@ if MIMIC_JPG_ROOT is None:
     MIMIC_JPG_ROOT = find_mimic_root()
 if MIMIC_JPG_ROOT is None or not os.path.exists(f"{MIMIC_JPG_ROOT}/mimic-cxr-2.0.0-metadata.csv.gz"):
     raise FileNotFoundError(
-        "Không thấy thư mục mimic-cxr-jpg-2.1.0.physionet.org trong Drive đã mount.\n"
-        "Mở drive.google.com → 'Shared with me' → chuột phải thư mục mimic-cxr-jpg-2.1.0.physionet.org → "
-        "Organize → Add shortcut → My Drive, rồi chạy lại cell này (hoặc gán MIMIC_JPG_ROOT bằng tay).")
+        "Folder mimic-cxr-jpg-2.1.0.physionet.org not found in the mounted Drive.\n"
+        "Open drive.google.com → 'Shared with me' → right-click mimic-cxr-jpg-2.1.0.physionet.org → "
+        "Organize → Add shortcut → My Drive, then rerun this cell (or set MIMIC_JPG_ROOT by hand).")
 META_PATH = f"{MIMIC_JPG_ROOT}/mimic-cxr-2.0.0-metadata.csv.gz"
 IMAGE_ROOT_DRIVE = f"{MIMIC_JPG_ROOT}/files"
 print("MIMIC_JPG_ROOT  :", MIMIC_JPG_ROOT)

@@ -1,47 +1,47 @@
 # %% [markdown]
-# # STEP 7 (v7) — Ablation siêu tham số + nhóm ảnh "khớp lần nhập viện"
+# # STEP 7 (v7) — Hyperparameter ablation + radiographs aligned with the source admission
 #
-# **Mục đích** (trả lời 2 ý review):
-# 1. **Siêu tham số.** Các mô hình cây trong bài dùng cấu hình mặc định (RF/ET `max_depth=None`, `min_samples_leaf=1`;
-#    LightGBM `max_depth=-1`, `min_child_samples=20`). Notebook này chạy thêm các cấu hình có điều chuẩn
-#    (`max_depth` ∈ {3, 5}, `min_samples_leaf` / `min_child_samples` ∈ {20, 50}) và LR với `C` ∈ {1, 0.1, 0.01},
-#    chọn cấu hình trên inner-validation như bài. Câu hỏi: cây được điều chuẩn có đuổi kịp LR khi tách bệnh nhân không,
-#    và lợi thế của cây dưới chia theo ảnh (P1) có co lại khi cây không còn học thuộc được bệnh nhân không?
-# 2. **EHR lệch nhãn.** Với nhãn theo lần nhập viện (A, C), 11 biến EHR vẫn lấy từ một lần nhập viện "nguồn" của bệnh nhân.
-#    Chỉ 36% ảnh (một ảnh/bệnh nhân) thuộc đúng lần nhập viện nguồn — ở nhóm này ảnh, EHR và nhãn khớp hoàn toàn.
-#    Notebook (a) báo kết quả riêng cho nhóm khớp / không khớp trong tập test của P2/P4/P4-C và (b) chạy lại toàn bộ
-#    chỉ trên nhóm khớp (`P2al_adm`, `P2al_cln`, cùng fold bệnh nhân P2).
+# **Purpose** (answers two review comments):
+# 1. **Hyperparameters.** The tree models in the paper use default settings (RF/ET `max_depth=None`, `min_samples_leaf=1`;
+#    LightGBM `max_depth=-1`, `min_child_samples=20`). This notebook adds regularised configurations
+#    (`max_depth` ∈ {3, 5}, `min_samples_leaf` / `min_child_samples` ∈ {20, 50}) and LR with `C` ∈ {1, 0.1, 0.01},
+#    selected on inner validation as in the paper. Questions: do regularised trees catch up with LR once patients are separated,
+#    and does the tree advantage under the record split (P1) shrink when trees can no longer memorise patients?
+# 2. **EHR misaligned with the labels.** With admission-level labels (A, C), the 11 EHR variables still come from the patient's "source" admission.
+#    Only 36% of radiographs (one per patient) belong to the source admission — for them image, EHR and label refer to the same admission.
+#    The notebook (a) reports results separately for aligned / misaligned test radiographs of P2/P4/P4-C and (b) reruns everything
+#    on the aligned radiographs only (`P2al_adm`, `P2al_cln`, same patient folds as P2).
 #
-# **Cách chạy** — tài khoản phụ (Colab Pro), Runtime **CPU, High-RAM** (càng nhiều core càng nhanh) → **Run all**.
-# Không cần BigQuery, không cần sửa gì.
-# - Cần trên Drive (đều đã có từ các lần trước): `data_aug/x_ray_and_features_data.csv`, `data_aug/embeddings/raddino`,
-#   fold v2 (`leakage_aware_v2/.../manifests`), nhãn STEP5 (`MMMDA_runs/v4_2026-10-19_admlabels/v4_labels`).
-# - Ước tính: ~25–40 phút với 48 core, ~2 giờ với 8 core. Rớt kết nối: Run all lại (tự bỏ qua phần đã xong).
-# - Xong khi thấy `FLUSH XONG`. Tải **một file** `v7_for_claude.zip` về `D:\project_TTNT_Data_aug\analysis_v7\`.
+# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** (more cores = faster) → **Run all**.
+# No BigQuery, nothing to edit.
+# - Needs on Drive (all from earlier runs): `data_aug/x_ray_and_features_data.csv`, `data_aug/embeddings/raddino`,
+#   v2 folds (`leakage_aware_v2/.../manifests`), STEP5 labels (`MMMDA_runs/v4_2026-10-19_admlabels/v4_labels`).
+# - Expected time: ~25–40 min with 48 cores, ~2 h with 8 cores. If the session drops: Run all again (finished tasks are skipped).
+# - Done when `FLUSH DONE` appears. The summary archive is `v7_for_claude.zip` in the output folder.
 #
-# Mọi thư mục/file notebook tạo ra đều có tiền tố phiên bản `v7`.
+# Every folder/file this notebook creates carries the version prefix `v7`.
 
 # %%
 # ============================== CELL 1 — CONTROL PANEL ==============================
-RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 nhãn, thư mục riêng)
-VERSION       = "v7_2026-10-22"       # tag phiên bản: có trong tên mọi thư mục/file tạo ra
+RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
+VERSION       = "v7_2026-10-22"       # version tag: part of every folder/file name this notebook creates
 
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
 CSV_PATH      = f"{DRIVE_ROOT}/x_ray_and_features_data.csv"
 EXPECTED_HASH = "da85519958e4bccb"
 RADDINO_DIR   = f"{DRIVE_ROOT}/embeddings/raddino"
-V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # fold P2 (chỉ đọc)
-V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # fold P1 (chỉ đọc)
-V4_ADMLABELS  = f"{DRIVE_ROOT}/MMMDA_runs/v4_2026-10-19_admlabels/v4_labels/v4_admission_labels.csv.gz"   # nhãn A/C (STEP5)
+V2_FOLDS      = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_subject_s42.csv"   # P2 folds (read only)
+V2_RECFOLDS   = f"{DRIVE_ROOT}/leakage_aware_v2/leakage_aware_v2/manifests/folds_record_s42.csv"    # P1 folds (read only)
+V4_ADMLABELS  = f"{DRIVE_ROOT}/MMMDA_runs/v4_2026-10-19_admlabels/v4_labels/v4_admission_labels.csv.gz"   # A/C labels (STEP5)
 OUT_ROOT      = f"{DRIVE_ROOT}/MMMDA_runs"                               # -> MMMDA_runs/v7_2026-10-22_ablation/
 LOCAL_CACHE   = "/content/mmmda_v7_cache"
-N_PAR         = None                  # số process song song; None = tất cả core
+N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
 # ============================== CELL 2 — INSTALL + MOUNT ==============================
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
-LOCAL_TEST = os.environ.get("V7_LOCAL_TEST") == "1"           # chỉ dùng cho test offline
+LOCAL_TEST = os.environ.get("V7_LOCAL_TEST") == "1"           # offline test only
 if LOCAL_TEST:
     CSV_PATH = os.environ["V7_CSV"]; OUT_ROOT = os.environ["V7_OUT"]; LOCAL_CACHE = os.environ["V7_CACHE"]
     RADDINO_DIR = os.environ["V7_EMB"]; V2_FOLDS = os.environ.get("V7_V2FOLDS", ""); V2_RECFOLDS = os.environ.get("V7_V2RECFOLDS", "")
@@ -103,7 +103,7 @@ df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV khác file đã benchmark — DỪNG"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 EHR_CONT = ["age", "oxygen", "heart_rate", "temperature", "hemoglobin", "rbc", "wbc"]
 EHR_BIN  = ["diabete", "hiv", "smoke", "cough"]
@@ -115,7 +115,7 @@ assert (AL.dataset_position.values == np.arange(len(df))).all() and (AL.dicom.va
 # aligned = the radiograph belongs to the admission from which the released labels AND EHR values were copied
 ALIGNED = (AL.label_source.values == "own")
 print("aligned radiographs:", int(ALIGNED.sum()), f"({ALIGNED.mean():.1%}) | patients:", df.subject_id[ALIGNED].nunique())
-assert df.subject_id[ALIGNED].is_unique, "mỗi bệnh nhân phải có đúng 1 ảnh khớp"
+assert df.subject_id[ALIGNED].is_unique, "each patient must have exactly one aligned radiograph"
 lab = {}
 for t in TARGETS:
     lab[f"rel__{t}"] = df[t].values.astype(np.int8)
@@ -130,7 +130,7 @@ print(f"on aligned radiographs, admission-aligned label == released label: {agre
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
-assert posm.notna().all(), f"{int(posm.isna().sum())} ảnh không có embedding RAD-DINO"
+assert posm.notna().all(), f"{int(posm.isna().sum())} radiographs without a RAD-DINO embedding"
 EMB = [f"raddino_{j}" for j in range(E.shape[1])]
 rec = pd.concat([df[["dataset_position", "subject_id"] + EHR].reset_index(drop=True),
                  pd.DataFrame(E[posm.astype(int).values], columns=EMB)], axis=1)
@@ -148,14 +148,14 @@ def rebuild_folds(Y, ids_, idcol):
         parts.append(pd.DataFrame({idcol: ids_, "fold": k, "role": role}))
     return pd.concat(parts, ignore_index=True)
 if V2_FOLDS and os.path.exists(V2_FOLDS):
-    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: đọc từ", V2_FOLDS)
+    m2 = pd.read_csv(V2_FOLDS); print("P2 folds: read from", V2_FOLDS)
 else:
-    print("P2 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P2 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     m2 = rebuild_folds(S[TARGETS].values, S.index.values, "subject_id")
 if V2_RECFOLDS and os.path.exists(V2_RECFOLDS):
-    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: đọc từ", V2_RECFOLDS)
+    m1 = pd.read_csv(V2_RECFOLDS); print("P1 folds: read from", V2_RECFOLDS)
 else:
-    print("P1 folds: không thấy file v2 -> dựng lại (cùng seed 42, cùng thuật toán)")
+    print("P1 folds: v2 file not found -> rebuilt (same seed 42, same algorithm)")
     m1 = rebuild_folds(df[TARGETS].values, df.dataset_position.values, "dataset_position")
 for k in range(5):
     r1 = m1[m1.fold == k].set_index("dataset_position").role.reindex(rec.dataset_position).values
@@ -211,7 +211,7 @@ for p, cfg in PROTO.items():
             for ft in cfg["feats"]:
                 TASKS.append((p, k, ft, t))
 atomic_to_csv(pd.DataFrame(skipped, columns=["protocol", "fold", "target", "pos_tr", "pos_va", "pos_te"]), DIRS["manifests"] / f"{V}_skipped.csv")
-print(f"tasks {len(TASKS)} | configs per task {len(CFG_NAMES)} | fits {len(TASKS) * len(CFG_NAMES)} | skipped (quá ít ca dương) {len(skipped)}")
+print(f"tasks {len(TASKS)} | configs per task {len(CFG_NAMES)} | fits {len(TASKS) * len(CFG_NAMES)} | skipped (too few positives) {len(skipped)}")
 if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
@@ -279,7 +279,7 @@ def task_done(task):
     p, k, ft, t = task
     return (DIRS["results"] / f"{V}_{p}__f{k}__{ft}__{t}.csv").exists()
 TODO = [t for t in TASKS if not task_done(t)]
-print(f"tasks đã xong từ lần chạy trước: {len(TASKS) - len(TODO)} | còn lại: {len(TODO)}")
+print(f"tasks finished in earlier sessions: {len(TASKS) - len(TODO)} | remaining: {len(TODO)}")
 prep_keys = sorted({(PROTO[p]["split"], k, ft) for p, k, ft, t in TODO})
 t0 = time.time()
 Parallel(n_jobs=min(NP, max(1, len(prep_keys))))(delayed(prep_task)(k, str(CACHE), FEATSETS, EMB_PCA_DIM) for k in tqdm(prep_keys, desc="preprocess"))
@@ -287,7 +287,7 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 sec = {"ehr": 2.5, "img_raddino": 8, "fusion_raddino": 9}
 scale = {"P1": 1.0, "P2": 1.0, "P2al": 0.4}
 eta = sum(sec[ft] * scale[PROTO[p]["split"]] * len(CFG_NAMES) for p, _, ft, _ in TODO) / NP / 60
-print(f"ETA ≈ {eta:.0f} phút với {NP} core")
+print(f"ETA ≈ {eta:.0f} min with {NP} cores")
 
 # %%
 # ============================== CELL 8 — STAGE B: MODELS (resume-safe: 1 file per task on Drive) ==============================
@@ -409,12 +409,12 @@ with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
             if f.is_file() and not f.name.endswith(".tmp"):
                 z.write(f, f"{OUT.name}/{DIRS[d].name}/{f.name}")
 os.replace(tmpz, ZIP)
-print("\nFILE CẦN TẢI:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
+print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 10 — FLUSH TO DRIVE (bắt buộc trước khi đóng tab) ==============================
+# ============================== CELL 10 — FLUSH TO DRIVE (required before closing the session) ==============================
 if IN_COLAB:
-    print("Đang đẩy toàn bộ file lên Google Drive... ĐỪNG đóng tab cho tới khi thấy 'FLUSH XONG'.")
+    print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH XONG — tải file", ZIP.name, "trong thư mục", OUT)
+    print("FLUSH DONE — download", ZIP.name, "from", OUT)

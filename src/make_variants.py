@@ -22,11 +22,11 @@ NB1 = HERE + "/nb1_src.py"; NB2 = HERE + "/nb2_src.py"
 
 # ---------- NB2 full ----------
 variant(NB2, HERE + "/v_nb2_full.py", {"RUN_MODE": '"full"'}, """
-## BƯỚC 1 — NB2 (tab GPU, T4 là đủ) — ĐÃ ĐẶT SẴN `RUN_MODE = "full"`
-Runtime → Change runtime type → **GPU (T4)** → **Run all**. Không cần sửa gì.
-Mất khoảng 35–45 phút (copy 29.083 ảnh ~17 phút + trích embedding). Rớt kết nối thì Run all lại, notebook chạy tiếp.
-Xong khi thấy `raddino: saved (29083, 768)` và `xrv_chex: saved (29083, 1024)`.
-Sau đó sang BƯỚC 2 (3 notebook worker).
+## STEP 1 — NB2 (GPU runtime; a T4 is enough) — preset to `RUN_MODE = "full"`
+Runtime → Change runtime type → **GPU (T4)** → **Run all**. Nothing to edit.
+Takes about 35–45 min (copying 29,083 images ~17 min + embedding extraction). If the session drops, Run all again; the notebook resumes.
+Done when `raddino: saved (29083, 768)` and `xrv_chex: saved (29083, 1024)` appear.
+Then continue with STEP 2 (three worker notebooks).
 """)
 convert(HERE + "/v_nb2_full.py", f"{OUT}/STEP1_NB2_embeddings_FULL.ipynb", gpu=True)
 
@@ -35,14 +35,14 @@ for k in range(3):
     variant(NB1, HERE + f"/v_worker{k}.py",
             {"RUN_MODE": '"full"', "N_WORKERS": "3", "WORKER_INDEX": str(k), "ROLE": '"worker"', "REQUIRE_EMBEDDINGS": "True"},
             f"""
-## BƯỚC 2 — WORKER {k} / 3 (tab CPU thứ {k + 1}) — ĐÃ CẤU HÌNH SẴN, KHÔNG CẦN SỬA GÌ
-Chỉ chạy **sau khi NB2 (BƯỚC 1) đã xong**.
+## STEP 2 — WORKER {k} / 3 (CPU session {k + 1}) — preconfigured, nothing to edit
+Run only **after NB2 (STEP 1) has finished**.
 Runtime → Change runtime type → **CPU, High-RAM** → **Run all**.
-Mở 3 notebook worker 0, 1, 2 ở 3 tab khác nhau và cho chạy cùng lúc; mỗi tab làm 1/3 công việc, không trùng nhau.
-Rớt kết nối: mở lại đúng notebook này → Run all (tự bỏ qua phần đã xong).
-Xong khi thấy `>>> WORKER {k} XONG` **và dòng cuối cùng `FLUSH XONG`** — chỉ đóng tab sau dòng này
-(lần trước kết quả worker 0 bị chậm/mất vì tab đóng khi Drive chưa đồng bộ xong).
-Phiên bản này ghi mỗi task thành 2 file trên Drive (thay vì hàng nghìn file nhỏ) và vẫn dùng lại kết quả cũ.
+Open worker notebooks 0, 1 and 2 in three separate sessions and run them at the same time; each does one third of the tasks, without overlap.
+If the session drops: reopen this notebook → Run all (finished tasks are skipped).
+Done when `>>> WORKER {k} DONE` **and the final line `FLUSH DONE`** appear — close the session only after that line
+(otherwise files that Google Drive has not finished syncing can be lost).
+Each task is written to Drive as two files (instead of thousands of small files); earlier results are reused.
 """)
     convert(HERE + f"/v_worker{k}.py", f"{OUT}/STEP2_NB1_worker{k}.ipynb")
 
@@ -50,11 +50,11 @@ Phiên bản này ghi mỗi task thành 2 file trên Drive (thay vì hàng nghì
 variant(NB1, HERE + "/v_final.py",
         {"RUN_MODE": '"full"', "N_WORKERS": "3", "WORKER_INDEX": "0", "ROLE": '"final"', "REQUIRE_EMBEDDINGS": "True"},
         """
-## BƯỚC 3 — FINAL: gộp kết quả + bảng + hình (tab CPU bất kỳ) — ĐÃ CẤU HÌNH SẴN
-Chỉ chạy **sau khi cả 3 worker đều báo XONG**. Run all (~5 phút, không train gì).
-Nếu dòng `jobs done …` báo còn thiếu job, notebook sẽ ghi rõ worker nào thiếu → mở lại notebook worker đó, Run all, rồi chạy lại FINAL.
-Chờ dòng cuối `FLUSH XONG` rồi mới đóng tab.
-Kết quả: `MyDrive/data_aug/leakage_aware_v2/leakage_aware_v2/results_all.csv` và thư mục `analysis/` → chép vào `D:\\project_TTNT_Data_aug\\analysis\\`.
+## STEP 3 — FINAL: merge results, tables and figures (any CPU session) — preconfigured
+Run only **after all three workers report DONE**. Run all (~5 min, no training).
+If the `jobs done …` line reports missing jobs, the notebook names the worker → reopen that worker notebook, Run all, then rerun FINAL.
+Wait for the final line `FLUSH DONE` before closing the session.
+Outputs: `MyDrive/data_aug/leakage_aware_v2/leakage_aware_v2/results_all.csv` and the `analysis/` folder (inputs of the analysis scripts).
 """)
 convert(HERE + "/v_final.py", f"{OUT}/STEP3_NB1_FINAL_merge_analysis.ipynb")
 print("done")
