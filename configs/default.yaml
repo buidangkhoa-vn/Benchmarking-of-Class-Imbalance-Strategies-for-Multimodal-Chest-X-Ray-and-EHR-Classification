@@ -1,0 +1,199 @@
+# Copy this file (e.g. to configs/local.yaml), set the paths, and pass it to every script with --config.
+# Relative paths are resolved from the repository root.
+
+paths:
+  cohort_csv: data/x_ray_and_features_data.csv            # analysed cohort (29,083 radiographs x 48 columns)
+  mimic_cxr_jpg: /path/to/mimic-cxr-jpg-2.1.0             # files/, mimic-cxr-2.0.0-metadata.csv.gz, mimic-cxr-2.0.0-chexpert.csv.gz
+  mimic_iv_hosp: /path/to/mimiciv/2.2/hosp                # admissions, patients, diagnoses_icd, d_icd_diagnoses (*.csv.gz)
+  initial_run_predictions: null                           # optional: saved predictions of the initial benchmark
+  output_dir: outputs
+
+mimic_iv:
+  source: local                       # local: read mimic_iv_hosp | bigquery: query bigquery_dataset
+  bigquery_dataset: physionet-data.mimiciv_2_2_hosp
+  gcp_project: YOUR_GCP_PROJECT_ID
+
+embeddings:
+  models: [raddino, densenet]         # RAD-DINO CLS (768-d), TorchXRayVision DenseNet-121 CheXpert pooled features (1024-d)
+  batch_size: 64
+  num_workers: 8
+  device: cuda
+
+cv:
+  n_folds: 5
+  inner_val_frac: 0.2                 # inner validation set: 20% of each outer training set
+  seeds: [42, 43]                     # 42: all experiments; 43: second fold assignment (sensitivity)
+  temporal: {train: 0.64, val: 0.16}  # P5, test = remaining 20% of patients
+
+preprocessing:
+  knn_neighbors: 5
+  pca_components: 64
+
+random_state: 42
+n_jobs: -1
+min_positives: {train: 10, val: 3, test: 3}   # cells with fewer positive rows are skipped
+
+feature_sets:
+  ehr:              {cont: ehr_cont, bin: ehr_bin}
+  img_scores:       {cont: image_scores}                       # 11 TorchXRayVision pathology scores
+  fusion_scores:    {cont: [image_scores, ehr_cont], bin: ehr_bin}
+  img_densenet:     {emb: densenet}
+  fusion_densenet:  {cont: ehr_cont, emb: densenet, bin: ehr_bin}
+  img_raddino:      {emb: raddino}
+  fusion_raddino:   {cont: ehr_cont, emb: raddino, bin: ehr_bin}
+  history_a:        {cont: [age_own], bin: prior_dx_a}          # age at own admission + prior diagnoses (A definition)
+  history_c:        {cont: [age_own], bin: prior_dx_c}
+  fusion_history_a: {cont: [age_own], emb: raddino, bin: prior_dx_a}
+  fusion_history_c: {cont: [age_own], emb: raddino, bin: prior_dx_c}
+  age_released:     {cont: [age]}
+  age_own:          {cont: [age_own]}
+  prior_dx_a:       {bin: prior_dx_a}
+  prior_dx_c:       {bin: prior_dx_c}
+  img_raddino_pc32:     {emb: raddino, pca: 32}
+  img_raddino_pc128:    {emb: raddino, pca: 128}
+  img_raddino_full:     {emb: raddino, pca: null}
+  fusion_raddino_pc32:  {cont: ehr_cont, emb: raddino, bin: ehr_bin, pca: 32}
+  fusion_raddino_pc128: {cont: ehr_cont, emb: raddino, bin: ehr_bin, pca: 128}
+  fusion_raddino_full:  {cont: ehr_cont, emb: raddino, bin: ehr_bin, pca: null}
+
+classifiers:
+  LR:           {family: LR, C: 1.0}
+  RF:           {family: RF}
+  ET:           {family: ET}
+  LGBM:         {family: LGBM}
+  XGB:          {family: XGB}
+  BRF:          {family: BRF}
+  EasyEnsemble: {family: EasyEnsemble}
+  LR_C0.1:      {family: LR, C: 0.1}
+  LR_C0.01:     {family: LR, C: 0.01}
+  RF_depth5:    {family: RF, max_depth: 5}
+  RF_depth3:    {family: RF, max_depth: 3}
+  RF_leaf20:    {family: RF, min_samples_leaf: 20}
+  RF_leaf50:    {family: RF, min_samples_leaf: 50}
+  ET_depth5:    {family: ET, max_depth: 5}
+  ET_depth3:    {family: ET, max_depth: 3}
+  ET_leaf20:    {family: ET, min_samples_leaf: 20}
+  ET_leaf50:    {family: ET, min_samples_leaf: 50}
+  LGBM_depth5:  {family: LGBM, max_depth: 5}
+  LGBM_depth3:  {family: LGBM, max_depth: 3, num_leaves: 8}
+  LGBM_child50: {family: LGBM, min_child_samples: 50}
+  RF_n100:      {family: RF, n_estimators: 100}
+  RF_n1000:     {family: RF, n_estimators: 1000}
+  ET_n100:      {family: ET, n_estimators: 100}
+  ET_n1000:     {family: ET, n_estimators: 1000}
+  LGBM_n100:    {family: LGBM, n_estimators: 100}
+  LGBM_n1000:   {family: LGBM, n_estimators: 1000}
+  XGB_n100:     {family: XGB, n_estimators: 100}
+  XGB_n1000:    {family: XGB, n_estimators: 1000}
+  XGB_depth3_n100:  {family: XGB, max_depth: 3, n_estimators: 100}
+  XGB_depth3:       {family: XGB, max_depth: 3}
+  XGB_depth3_n1000: {family: XGB, max_depth: 3, n_estimators: 1000}
+
+# Labels: released (R), A admission-aligned, C clean, CX CheXpert report labels.
+# Splits: record (P1), patient (P2), temporal (P5), patient_aligned (P2 folds restricted to aligned radiographs).
+# views: frontal restricts a radiograph-level protocol to AP/PA radiographs (same folds).
+experiments:
+  main:                               # Sec. V-A to V-C, Table IV, Fig. 1-2
+    unseen_clean_threshold: true
+    protocols:
+      - {name: P1, split: record, labels: released, table: radiograph, seeds: [42],
+         features: [ehr, img_scores, fusion_scores],
+         classifiers: [LR, RF, ET, LGBM], strategies: [none, ros, smote, smote_nc]}
+      - {name: P2, split: patient, labels: released, table: radiograph, seeds: [42],
+         features: [ehr, img_scores, fusion_scores, img_densenet, fusion_densenet, img_raddino, fusion_raddino],
+         classifiers: [LR, RF, ET, LGBM, XGB], strategies: [none, class_weight, ros, smote, smote_nc],
+         ensembles: [BRF, EasyEnsemble]}
+      - {name: P3, split: patient, labels: released, table: patient, seeds: [42],
+         features: [ehr, img_scores, fusion_scores, img_densenet, fusion_densenet, img_raddino, fusion_raddino],
+         classifiers: [LR, RF, ET, LGBM, XGB], strategies: [none, class_weight, ros, smote, smote_nc],
+         ensembles: [BRF, EasyEnsemble]}
+
+  admission:                          # Sec. V-D, Table V
+    save_predictions: true            # needed for the P5 bootstrap
+    smote_nc_without_discrete: smote
+    protocols:
+      - {name: P1-A, split: record, labels: A, seeds: [42], features: [ehr, img_scores],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P4, split: patient, labels: A, seeds: [42], features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P4-C, split: patient, labels: C, seeds: [42], features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P5-R, split: temporal, labels: released, features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P5-A, split: temporal, labels: A, features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+
+  chexpert_history:                   # Sec. V-D (history), V-E, Table VI
+    smote_nc_without_discrete: smote
+    protocols:
+      - {name: P1-CX, split: record, labels: CX, seeds: [42], features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P2-CX, split: patient, labels: CX, seeds: [42], features: [ehr, img_scores, img_raddino, fusion_raddino],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P4-H, split: patient, labels: A, seeds: [42], features: [history_a, fusion_history_a],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P4-C-H, split: patient, labels: C, seeds: [42], features: [history_c, fusion_history_c],
+         classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+
+  tuning:                             # Sec. V-F, tuned classifiers and the aligned subset
+    float32_predictions: false
+    protocols:
+      - &tuned {name: P1, split: record, labels: released, seeds: [42], features: [ehr, fusion_raddino], strategies: [none],
+                classifiers: [LR, LR_C0.1, LR_C0.01, RF, RF_depth5, RF_depth3, RF_leaf20, RF_leaf50, ET, ET_depth5, ET_depth3,
+                              ET_leaf20, ET_leaf50, LGBM, LGBM_depth5, LGBM_depth3, LGBM_child50]}
+      - {<<: *tuned, name: P2, split: patient, aligned_metrics: true}
+      - {<<: *tuned, name: P4, split: patient, labels: A, aligned_metrics: true}
+      - {<<: *tuned, name: P4-C, split: patient, labels: C, aligned_metrics: true}
+      - {<<: *tuned, name: P2-al-A, split: patient_aligned, labels: A, features: [ehr, img_raddino, fusion_raddino]}
+      - {<<: *tuned, name: P2-al-C, split: patient_aligned, labels: C, features: [ehr, img_raddino, fusion_raddino]}
+
+  trees:                              # Sec. V-F, number of trees / boosting rounds (100, 300, 1000)
+    float32_predictions: false
+    protocols:
+      - &trees {name: P1, split: record, labels: released, seeds: [42], features: [ehr, fusion_raddino], strategies: [none],
+                classifiers: [LR, RF_n100, RF, RF_n1000, ET_n100, ET, ET_n1000, LGBM_n100, LGBM, LGBM_n1000,
+                              XGB_n100, XGB, XGB_n1000, XGB_depth3_n100, XGB_depth3, XGB_depth3_n1000]}
+      - {<<: *trees, name: P2, split: patient}
+      - {<<: *trees, name: P4, split: patient, labels: A}
+      - {<<: *trees, name: P4-C, split: patient, labels: C}
+
+  sensitivity:                        # Sec. V-F, PCA size, age vs history, second fold seed, Brier score
+    float32_predictions: false
+    lr_max_iter: 3000
+    smote_nc_without_discrete: smote
+    smote_nc_indicators_first: true
+    protocols:
+      - {name: P2, split: patient, labels: released, seeds: [42, 43], features: [ehr, fusion_raddino],
+         classifiers: [LR], strategies: [none, class_weight, ros, smote_nc]}
+      - {name: P2, split: patient, labels: released, seeds: [42, 43], features: [img_raddino], classifiers: [LR]}
+      - {name: P4, split: patient, labels: A, seeds: [42, 43], features: [ehr, img_raddino, fusion_raddino, history_a], classifiers: [LR]}
+      - {name: P4-C, split: patient, labels: C, seeds: [42, 43], features: [ehr, img_raddino, fusion_raddino, history_c], classifiers: [LR]}
+      - &pca {name: P2, split: patient, labels: released, seeds: [42], classifiers: [LR],
+              features: [img_raddino_pc32, img_raddino_pc128, img_raddino_full, fusion_raddino_pc32, fusion_raddino_pc128, fusion_raddino_full]}
+      - {<<: *pca, name: P4, labels: A}
+      - {<<: *pca, name: P4-C, labels: C}
+      - {name: P4, split: patient, labels: A, seeds: [42], features: [age_released, age_own, prior_dx_a], classifiers: [LR]}
+      - {name: P4-C, split: patient, labels: C, seeds: [42], features: [age_released, age_own, prior_dx_c], classifiers: [LR]}
+
+  frontal:                            # Sec. V-F, frontal (AP/PA) radiographs only, admission grid
+    smote_nc_without_discrete: smote
+    protocols:
+      - &frontal {name: P2-F, split: patient, labels: released, views: frontal, seeds: [42],
+                  features: [ehr, img_scores, img_raddino, fusion_raddino],
+                  classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {<<: *frontal, name: P4-F, labels: A}
+      - {<<: *frontal, name: P4-C-F, labels: C}
+
+  densenet_admission:                 # Sec. V-F, image encoder without MIMIC-CXR pretraining, admission grid
+    smote_nc_without_discrete: smote
+    protocols:
+      - &dense {name: P4, split: patient, labels: A, seeds: [42], features: [img_densenet, fusion_densenet],
+                classifiers: [LR, LGBM, ET], strategies: [none, class_weight, ros, smote_nc]}
+      - {<<: *dense, name: P4-C, labels: C}
+
+  joint_tuning:                       # Sec. V-F, strategies combined with tuned classifiers (P4-C)
+    smote_nc_without_discrete: smote
+    protocols:
+      - {name: P4-C-JT, split: patient, labels: C, seeds: [42], features: [ehr, fusion_raddino],
+         classifiers: [LR, LR_C0.1, LR_C0.01, LGBM, LGBM_depth5, LGBM_depth3, LGBM_child50],
+         strategies: [none, class_weight, ros, smote_nc]}

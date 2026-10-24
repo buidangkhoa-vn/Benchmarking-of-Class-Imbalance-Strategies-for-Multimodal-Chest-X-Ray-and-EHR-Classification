@@ -1,0 +1,19 @@
+# MIMIC-derived data must not be committed (PhysioNet data use agreement)
+outputs/
+data/*
+!data/README.md
+*.csv
+*.csv.gz
+*.parquet
+*.npz
+*.npy
+*.pkl
+*.zip
+*.jpg
+*.png
+configs/local*.yaml
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
