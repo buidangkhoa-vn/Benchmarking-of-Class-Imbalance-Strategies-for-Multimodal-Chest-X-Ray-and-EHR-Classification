@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxr-ehr-imbalance"
+version = "1.0.0"
+description = "Leakage- and label-aware benchmark of class-imbalance strategies for chest X-ray and EHR classification"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["numpy", "pandas", "scikit-learn", "imbalanced-learn", "iterative-stratification", "lightgbm", "xgboost",
+                "scipy", "joblib", "threadpoolctl", "tqdm", "matplotlib", "pyyaml"]
+
+[project.optional-dependencies]
+images = ["torch", "torchvision", "torchxrayvision", "transformers", "pillow"]
+bigquery = ["google-cloud-bigquery", "db-dtypes"]
+dev = ["pytest", "black", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
