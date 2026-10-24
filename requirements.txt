@@ -1,4 +1,4 @@
-# Versions used on Google Colab for the main runs (Python 3.13)
+# versions used for the paper (Python 3.13)
 numpy==2.1.3
 pandas==2.2.3
 scikit-learn==1.6.1
@@ -10,11 +10,13 @@ scipy
 joblib
 tqdm
 matplotlib
-# STEP1 (image embeddings, GPU)
+pyyaml
+# step 01 (image embeddings)
 torch
 torchvision
 torchxrayvision
 transformers
-# STEP4 / STEP6 (MIMIC-IV / MIMIC-CXR on BigQuery)
+pillow
+# step 02 with mimic_iv.source: bigquery
 google-cloud-bigquery
 db-dtypes

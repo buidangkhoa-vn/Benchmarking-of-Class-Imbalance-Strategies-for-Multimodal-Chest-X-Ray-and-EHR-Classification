@@ -1,4 +1,7 @@
-# Never commit MIMIC-derived data (PhysioNet data use agreement)
+# MIMIC-derived data must not be committed (PhysioNet data use agreement)
+outputs/
+data/*
+!data/README.md
 *.csv
 *.csv.gz
 *.parquet
@@ -8,13 +11,7 @@
 *.zip
 *.jpg
 *.png
-*.pdf
-data/
-out*/
-audit_out/
-figures/
-mmmda_*_cache/
-mmmda_*_out/
-MMMDA_runs/
+configs/local*.yaml
 __pycache__/
-.ipynb_checkpoints/
+*.egg-info/
+.venv/

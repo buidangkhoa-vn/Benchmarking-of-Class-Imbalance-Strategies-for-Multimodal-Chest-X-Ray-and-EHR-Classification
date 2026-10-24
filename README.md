@@ -1,107 +1,100 @@
-# Class-imbalance strategies for chest X-ray + EHR classification under leakage- and label-aware evaluation
+# Leakage- and label-aware benchmarking of class-imbalance strategies for chest X-ray and EHR classification
 
-Code for *"Leakage- and Label-Aware Benchmarking of Class-Imbalance Strategies for Multimodal Chest X-Ray and EHR Classification"* (MMMDA workshop, IEEE BigData 2026).
+Code for the paper *Leakage- and Label-Aware Benchmarking of Class-Imbalance Strategies for Multimodal Chest X-Ray and EHR Classification* (MMMDA workshop, IEEE BigData 2026).
 
-The notebooks and scripts here produced every number, table and figure in the paper. **The repository contains no data.**
+The pipeline compares imbalance strategies (class weighting, random oversampling, SMOTE, type-aware SMOTE-NC, balanced ensembles) with several classifiers and representations (EHR variables, TorchXRayVision pathology scores, DenseNet and RAD-DINO embeddings, early fusion) under record-level, patient-level and calendar-time splits, with released, admission-aligned, clean and CheXpert labels.
 
 ## Data access
 
-The project uses MIMIC-IV (v2.2) and MIMIC-CXR-JPG (v2.1.0), which hold clinical records and chest radiographs of patients treated at the Beth Israel Deaconess Medical Center.
+The repository contains no data. It uses MIMIC-IV (v2.2) and MIMIC-CXR-JPG (v2.1.0), which require:
 
-> ⚠️ **Data access**
->
-> These datasets cannot be downloaded publicly. To use them you need:
-> * the PhysioNet credentialed health data training (CITI "Data or Specimens Only Research");
-> * a credentialed PhysioNet account and a signed data use agreement for each database;
-> * for the BigQuery steps, a Google account linked to that PhysioNet account.
->
-> Follow the PhysioNet data use agreements. Do not upload MIMIC-derived files (labels, predictions, embeddings, split files with subject identifiers) to a public repository; `.gitignore` blocks the usual file types.
+* the PhysioNet credentialed health data training (CITI "Data or Specimens Only Research");
+* a credentialed PhysioNet account and a signed data use agreement for each database.
 
-## Files
+Please follow the PhysioNet data use agreements and do not publish MIMIC-derived files (labels, predictions, embeddings, split files with subject identifiers). `.gitignore` excludes `outputs/` and the usual data formats.
 
-| Step | File | Purpose | Paper |
-|---|---|---|---|
-| 0 | `analysis/original_benchmark_diagnostics.py` | Checks on the initial record-split run from its saved predictions: patient overlap, exact EHR matches, lookup baseline, seen vs. unseen patients, late fusion | Sec. III-D |
-| 1 | `notebooks/STEP1_NB2_embeddings_FULL.ipynb` (GPU) | Re-extracts the 18 TorchXRayVision outputs (provenance check), 1024-d DenseNet features and 768-d RAD-DINO embeddings for the 29,083 radiographs; view metadata | Sec. III-A, IV-C |
-| 2 | `notebooks/STEP2_NB1_worker{0,1,2}.ipynb` (3 CPU sessions) | P1 record split, P2 patient-grouped, P3 patient-level: 7 strategies × 5 classifiers × 7 representations × 8 targets | Sec. IV, V-A–C |
-| 3 | `notebooks/STEP3_NB1_FINAL_merge_analysis.ipynb` | Merges the worker outputs; baselines, tables, figures | Sec. V |
-| 3b | `analysis/analyze_v2_merge.py`, `analysis/figs_v2.py` | Final P1–P3 analysis (15,680 fits), Wilcoxon + Holm tests, sampler audit; `figs_v2.py` draws draft figures that 5c and 9c replace | Sec. V-A–C |
-| 4 | `notebooks/STEP4_v3_2026-10-19_P4P5_admission_temporal.ipynb` | Extracts MIMIC-IV `admissions`, `patients`, `diagnoses_icd`, `d_icd_diagnoses` for the cohort from BigQuery (`mimiciv_2_2_hosp`) | Sec. III-C |
-| 4a | `notebooks/STEP4a_v3_..._BQ_extract_MAIN_ACCOUNT_only_if_needed.ipynb` | Optional: the same extraction run from another Google account | — |
-| 5 | `notebooks/STEP5_v4_2026-10-19_admission_labels.ipynb` | Rebuilds the released labels from ICD codes, builds admission-aligned (A) and clean (C) labels; runs P1-A, P4, P4-C and the calendar-time split P5 | Sec. III-C, IV-E, V-D |
-| 5b | `analysis/label_provenance_audit.py` | Stand-alone label audit from the BigQuery exports | Sec. III-C, Table I |
-| 5c | `analysis/analyze_v4.py`, `analysis/fig2_v4.py` | A/C-label analysis, modality and strategy tests; per-target margin figure | Sec. V-A, V-D, Fig. 1 |
-| 6 | `notebooks/STEP6_v5_2026-10-19_chexpert_labels.ipynb` | CheXpert report labels of the same radiographs (P1 vs. P2); history features (age + prior diagnoses) with A and C labels | Sec. IV-F, V-D, V-E |
-| 6b | `analysis/analyze_v5.py` | CheXpert and history analysis | Sec. V-D, V-E |
-| 7 | `notebooks/STEP7_v7_2026-10-22_ablation_hparams_aligned.ipynb` | Tuned classifiers (RF / Extra Trees / LightGBM depth and leaf grids, LR with C ∈ {1, 0.1, 0.01}) under P1, P2, P4, P4-C; fully aligned subset | Sec. V-F |
-| 7b | `analysis/analyze_v7.py` | Analysis of step 7 | Sec. V-F |
-| 8 | `notebooks/STEP8_v8_2026-10-22_pca_age_seed_brier.ipynb` | PCA size (32/64/128/full), age vs. prior-diagnosis features, a second CV seed (43), Brier scores; logistic regression | Sec. V-F |
-| 8b | `analysis/analyze_v8.py` | Analysis of step 8, repeated-CV tests | Sec. V-F |
-| 9 | `analysis/tables_sd_ci.py` | Mean ± SD, 95% CIs and Brier scores for the result tables (no refitting) | Tables IV–VI |
-| 9b | `analysis/corrected_t_tests.py` | Corrected resampled t-tests (Nadeau & Bengio, 2003) for the main paired comparisons | Sec. V |
-| 9c | `analysis/fig3_strategy_by_representation.py` | Strategy-effect figure, one panel per representation | Fig. 2 |
-| 9d | `analysis/selection_and_timing_checks.py` | Per-fold configuration selection, results without the rarest targets, P5 overlap, timing of prior diagnoses | Sec. IV-E/F, V-F |
+## Installation
 
-`src/` holds the Python source of each notebook and the scripts that build the notebooks from it:
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt     # versions used for the paper
+pip install -e .
+```
 
-| Builder | Notebooks |
-|---|---|
-| `python src/make_variants.py` | STEP1–3 |
-| `python src/make_v3.py` | STEP4, STEP4a |
-| `python src/make_v5.py` | STEP6 |
-| `python src/to_ipynb.py src/nb_v4_src.py notebooks/STEP5_...ipynb` | STEP5 (same for `nb_v7_src.py` → STEP7, `nb_v8_src.py` → STEP8) |
+Python 3.10 or later. Step 01 needs PyTorch, TorchXRayVision and Transformers (a GPU is recommended); the other steps run on CPU.
 
 ## Inputs
 
-* `x_ray_and_features_data.csv`: the cohort (29,083 radiographs × 48 columns, 10,479 patients), taken from an earlier transfer-learning study (cohort code: <https://github.com/clemence-mottez/mimic_iv>). Each notebook checks its hash and stops if the file differs; SHA-256 values are in `splits/MANIFEST_SHA256.txt`.
-* MIMIC-CXR-JPG v2.1.0: images, `mimic-cxr-2.0.0-metadata.csv.gz`, `mimic-cxr-2.0.0-chexpert.csv.gz`.
-* MIMIC-IV v2.2 `hosp` tables on BigQuery (`physionet-data.mimiciv_2_2_hosp`).
-* `selected_predictions.csv.gz`: saved predictions of the initial record-split run (step 0 only).
+| Input | Used by |
+|---|---|
+| `x_ray_and_features_data.csv`: the analysed cohort (29,083 radiographs, 10,479 patients) from an earlier transfer-learning study ([cohort code](https://github.com/clemence-mottez/mimic_iv)) | all steps |
+| MIMIC-CXR-JPG v2.1.0: `files/`, `mimic-cxr-2.0.0-metadata.csv.gz`, `mimic-cxr-2.0.0-chexpert.csv.gz` | 01, 03 |
+| MIMIC-IV v2.2 `hosp`: `admissions`, `patients`, `diagnoses_icd`, `d_icd_diagnoses` (local CSV files or BigQuery) | 02 |
+| Saved predictions of the initial record-split benchmark (optional) | 07 |
 
-## Running
+Copy `configs/default.yaml` to `configs/local.yaml` and set the paths. Every path, seed and setting is in this file.
 
-We ran the notebooks on Google Colab Pro, with the data on Google Drive under `MyDrive/data_aug/`. The first code cell of each notebook is a control panel with the paths; edit it for another layout, and set `GCP_PROJECT` before STEP4/STEP6 (the authors' project id and account were replaced by placeholders). A notebook that is restarted skips finished tasks. Outputs go to a folder named after the step's version (`MMMDA_runs/v3_...`, `v4_...`, …, `v8_...`).
+## Pipeline
 
-Order: STEP1 → STEP2 (three sessions in parallel) → STEP3 → STEP4 → STEP5 → STEP6 → STEP7 → STEP8.
+Run the scripts in order; each takes `--config configs/local.yaml`. Outputs go to `outputs/` (set in the config).
 
-The analysis scripts read the notebook outputs. Paths are set with environment variables:
+| Script | Output | Paper |
+|---|---|---|
+| `scripts/01_extract_embeddings.py` | RAD-DINO and DenseNet embeddings, view positions, provenance check of the 18 image columns | III-A, IV-C |
+| `scripts/02_extract_mimic_tables.py` | the four MIMIC-IV tables for the cohort's patients | III-C |
+| `scripts/03_build_labels.py` | label reconstruction and audit (Table I), admission-aligned (A) and clean (C) labels, prior-diagnosis flags, own-admission age, CheXpert labels | III-B, III-C |
+| `scripts/04_make_splits.py` | record folds, patient folds (seeds 42 and 43), calendar-time split | IV-A |
+| `scripts/05_run_experiments.py` | model fits and baselines for the experiments `main`, `admission`, `chexpert_history`, `tuning`, `trees`, `sensitivity` | IV, V |
+| `scripts/06_analyze.py` | Tables IV-VI, strategy tests, paired comparisons, robustness checks, Fig. 1-2 | V |
+| `scripts/07_initial_run_diagnostics.py` | diagnostics of the initial benchmark from its saved predictions (Table II) | III-D |
 
-```bash
-export MMMDA_DATA_DIR=/path/to/data          # x_ray_and_features_data.csv and analysis/ from STEP3 (incl. manifests/)
-export MMMDA_WORKER0_DIR=/path/to/worker0    # results/results_worker0_5125.csv (see Notes)
-export MMMDA_OUT=out_v2 MMMDA_FIG_DIR=figures
-python analysis/analyze_v2_merge.py && python analysis/figs_v2.py
-export MMMDA_V4_ANALYSIS=/path/to/v4_2026-10-19_admlabels/v4_analysis MMMDA_V4_OUT=out_v4
-python analysis/analyze_v4.py && python analysis/fig2_v4.py
-export MMMDA_V5_ANALYSIS=/path/to/v5_2026-10-19_chexpert/v5_analysis MMMDA_V5_OUT=out_v5
-python analysis/analyze_v5.py
-export MMMDA_V7_ANALYSIS=/path/to/v7_2026-10-22_ablation/v7_analysis MMMDA_V7_OUT=out_v7
-python analysis/analyze_v7.py
-export MMMDA_V8_ANALYSIS=/path/to/v8_2026-10-22_sensitivity/v8_analysis MMMDA_V8_OUT=out_v8
-python analysis/analyze_v8.py
-python analysis/tables_sd_ci.py               # uses MMMDA_OUT, MMMDA_V4_ANALYSIS, MMMDA_V5_ANALYSIS
-python analysis/corrected_t_tests.py
-python analysis/fig3_strategy_by_representation.py
-export MMMDA_V3_BQ=/path/to/v3_bq MMMDA_P5_MANIFEST=/path/to/v3_folds_P5_temporal.csv
-python analysis/selection_and_timing_checks.py
-python analysis/original_benchmark_diagnostics.py --csv x_ray_and_features_data.csv --preds selected_predictions.csv.gz
-python analysis/label_provenance_audit.py --csv x_ray_and_features_data.csv --bq-dir /path/to/v3_bq --out audit_out
+`05_run_experiments.py --experiment main --folds 0 --targets pneumonia` runs a small subset as a quick check. Finished parts are not refitted when a script is run again.
+
+## Protocols
+
+| Protocol | Split | Labels | Experiment |
+|---|---|---|---|
+| P1 | record folds | released | main, tuning, trees |
+| P2 | patient folds | released | main, tuning, trees, sensitivity |
+| P3 | patient folds, one row per patient | released | main |
+| P1-A | record folds | A | admission |
+| P4, P4-C | patient folds | A, C | admission, tuning, trees, sensitivity |
+| P5-R, P5-A | calendar-time split | released, A | admission |
+| P1-CX, P2-CX | record / patient folds | CheXpert | chexpert_history |
+| P4-H, P4-C-H | patient folds, time-aligned history features | A, C | chexpert_history |
+| P2-al-A, P2-al-C | patient folds restricted to aligned radiographs | A, C | tuning |
+
+Splits (`src/cxr_ehr_imbalance/splits.py`):
+
+* 5-fold iterative multilabel stratification on the eight targets (`MultilabelStratifiedKFold`, seed 42; seed 43 for the second fold assignment). Record folds stratify radiographs; patient folds stratify patients, so a patient's radiographs stay in one partition.
+* Inside each outer training set, 20% of the units (radiographs or patients, as in the outer split) form the inner validation set (`MultilabelStratifiedShuffleSplit`, seed 100 x seed + fold). Per fold: 64% inner training, 16% inner validation, 20% test.
+* P5 orders patients by the estimated calendar year of their first radiograph and assigns the first 64% to training, the next 16% to validation and the last 20% to testing.
+
+Scaling, imputation and PCA are fitted on the inner training set; thresholds and configurations are chosen on the inner validation set; test folds are used only for evaluation.
+
+## Reproducibility
+
+* Package versions: `requirements.txt`. Seeds: `random_state` and `cv.seeds` in the config.
+* The published numbers come from an earlier notebook version of this code (Google Colab, package versions as in `requirements.txt`). The scripts give the same labels, splits and baselines, and `06_analyze.py` applied to the results of those runs reproduces the tables and tests of the paper.
+* Model selection breaks ties in inner-validation F2 by grid order (strategies: none, class weighting, ROS, SMOTE, SMOTE-NC; classifiers in config order).
+* Trees on PCA-reduced embeddings can vary slightly between runs (up to 0.007 macro F2 for a fixed configuration in our reruns).
+* Statistics: one value per outer fold and the corrected resampled t-test (Nadeau & Bengio, 2003), see `src/cxr_ehr_imbalance/stats.py`.
+
+## Repository structure
+
 ```
-
-## Settings
-
-* Folds: 5-fold iterative multilabel stratification, grouped by patient except in P1; seed 42 (STEP8 adds seed 43). Inner split 80/20 of each training fold, grouped the same way.
-* Model selection: configuration with the highest mean inner-validation F2 over folds; decision threshold chosen on the inner validation set.
-* SMOTE variants: `k_neighbors = min(5, n_minority − 1)`; global seed 42.
-* Library versions are in `requirements.txt`; hyperparameters are listed in Sec. IV-D of the paper and in the control panel of each notebook.
-
-## Notes
-
-* **Splits.** Split files are not distributed because they list MIMIC subject identifiers. They are regenerated deterministically; compare them with `splits/MANIFEST_SHA256.txt`.
-* **Worker 0 of STEP2.** Its per-task files did not finish syncing to Google Drive before the session closed, so the merge in STEP3 saw 10,555 of 15,680 fits. The other 5,125 rows come from worker 0's own `results_all.csv`, and `analyze_v2_merge.py` combines both. The predictions of those tasks were lost, so validation-weighted late fusion appears only as a limitation.
-* **Determinism.** Linear and EHR-only models are deterministic. Tree models on PCA-reduced embeddings can vary between runs: up to 0.007 macro F2 for a fixed configuration and 0.012 when the variation changes which configuration is selected.
-* **Labels.** `label_provenance_audit.py` reproduces the released labels for 10,477 of 10,479 patients with the rule described in the paper (keyword match on the ICD long titles of the patient's last-listed admission).
-* **Language.** Comments, markdown cells and printed messages were translated from Vietnamese to English after the experiments were run. The code itself was not changed: the Python token stream of every source file and notebook code cell, excluding comments and strings, is identical to the version that was run.
+configs/default.yaml          paths, splits, feature sets, classifiers, experiments
+data/README.md                expected input files
+scripts/01_...07_*.py         pipeline steps
+src/cxr_ehr_imbalance/
+  cohort.py                   cohort columns, embeddings, patient-level table, feature sets
+  labels.py                   label rule, A/C labels, prior diagnoses, CheXpert labels
+  splits.py                   record, patient and calendar-time splits
+  modeling.py                 preprocessing, samplers, classifiers, thresholds, metrics
+  runner.py                   experiment runner and baselines
+  stats.py                    selection, corrected t-test, Holm, bootstrap
+  report.py                   tables and figures
+```
 
 ## Citation
 
@@ -115,4 +108,4 @@ python analysis/label_provenance_audit.py --csv x_ray_and_features_data.csv --bq
 
 ## License
 
-To be chosen by the authors.
+MIT — see `LICENSE`. This covers the code only; MIMIC-IV, MIMIC-CXR-JPG, RAD-DINO and TorchXRayVision remain under their own licenses and data use agreements.

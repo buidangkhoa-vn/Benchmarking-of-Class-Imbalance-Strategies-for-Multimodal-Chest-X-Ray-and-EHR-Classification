@@ -1,4 +1,4 @@
-"""Diagnostics of the ORIGINAL (record-split) benchmark from its saved predictions — no retraining.
+"""Diagnostics of the ORIGINAL (record-split) benchmark from its saved predictions - no retraining.
 Reproduces Section III-D / Table 2 of the paper: patient overlap, EHR exact-match rate, the no-learning
 EHR lookup table, and seen- vs unseen-patient performance of the feature-set winners (incl. late fusion).
 

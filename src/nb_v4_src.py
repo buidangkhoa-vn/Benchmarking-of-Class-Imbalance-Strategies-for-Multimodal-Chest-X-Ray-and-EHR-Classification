@@ -1,36 +1,26 @@
 # %% [markdown]
-# # STEP 5 (v4) — Admission-aligned labels (P1/P4/P5) — supersedes STEP4 v3
+# # STEP 5 (v4): admission-aligned labels (P1-A, P4, P4-C, P5)
 #
-# **Why v4.** The v3 results showed that the labels in `x_ray_and_features_data.csv` were created by keyword matching on the ICD titles
-# of **one** admission, after which the labels + EHR of **each patient's last row (in file order)** were copied to all radiographs of
-# that patient. The reconstructed rule matches **10,477/10,479** patients. Actual keywords: `pneumonia`, `tuberculosis`, `bronchitis`,
-# `arthritis`, `fracture`, `malignant neoplasm` (→ "lung_cancer" is in fact *any* cancer), `scoliosis`, and titles ending in
-# `infection` (→ "lung_infection").
+# The released labels follow a keyword rule on the ICD titles of one admission per patient (the patient's last row in
+# file order), copied to all of the patient's radiographs (10,477 of 10,479 patients). Keywords: pneumonia, tuberculosis,
+# bronchitis, arthritis, fracture, "malignant neoplasm" (any cancer), scoliosis and titles ending in "infection".
 #
-# This notebook (earlier results are left untouched):
-# 1. Reuses the four BigQuery tables extracted in v3 (no new sign-in if the v3 folder is still on Drive).
-# 2. Re-checks the label rule and measures label misalignment (share of radiographs carrying another admission's label, earlier/later).
-# 3. Assigns **admission-aligned labels** = diagnoses of **the radiograph's own admission** for all 8 targets, then runs:
-#    - `P1_admission`: record split as in the original design (v2 P1 folds) — how much leakage remains with aligned labels;
-#    - `P4_admission`: patient split (v2 P2 folds);
-#    - `P5_temporal` / `P5_temporal_adm`: calendar-time split (as in v3), released / admission-aligned labels;
-#    - `P4_admission_clean`: as P4 but without non-diagnostic codes (history, screening, vaccination, "without ...")
-#      and with correct definitions of "lung cancer" (lung/bronchus malignancy) and "lung infection" (lung/respiratory infection).
+# The notebook reuses the v3 BigQuery tables, checks the rule, measures label misalignment and builds admission-aligned
+# labels (A: diagnoses of the radiograph's own admission) and clean labels (C: without history, screening, vaccination
+# and negated titles; lung cancer = lung/bronchus malignancy, lung infection = lung/respiratory infection). Runs:
+# - P1_admission: record folds (v2 P1) with A labels
+# - P4_admission, P4_admission_clean: patient folds (v2 P2) with A and C labels
+# - P5_temporal, P5_temporal_adm: calendar-time split with released and A labels
 #
-# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** → **Run all**. Nothing to edit.
-# - If the v3 tables are not found, the notebook asks for a BigQuery sign-in as in STEP4 (link → choose <your PhysioNet-credentialed Google account> → paste the code).
-# - Expected time ~90–110 min with 8 cores. If the session drops: Run all again (finished tasks are skipped).
-# - Done when `FLUSH DONE` appears. The summary archive `v4_for_claude.zip` is written to the output folder (path printed at the end).
-#
-# Every folder/file this notebook creates carries the version prefix `v4`.
+# Run all (CPU, high RAM). If the v3 tables are missing, it asks for a BigQuery sign-in as in STEP4.
+# About 90-110 min with 8 cores; a rerun skips finished tasks. Output names start with v4.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of the account with PhysioNet access (<your PhysioNet-credentialed Google account>)
-BQ_AUTH       = "other_account"       # "other_account": sign in to BigQuery with a different account than the one running Colab
-                                      #                  (paste a verification code; choose the account with PhysioNet access)
-                                      # "same_account" : the account running Colab is the account with PhysioNet access
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project with PhysioNet access
+BQ_AUTH       = "other_account"       # "other_account": BigQuery account differs from the Colab account
+                                      # "same_account": Colab runs under the PhysioNet account
 VERSION       = "v4_2026-10-19"       # version tag: part of every folder/file name this notebook creates
 
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
@@ -54,7 +44,7 @@ BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1
 N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("V3_LOCAL_TEST") == "1"           # offline test only
@@ -75,7 +65,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| VERSION:", VERSION)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob, re, shutil, zipfile
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -121,12 +111,12 @@ for d in list(DIRS.values()) + [CACHE / f"{V}_X", CACHE / f"{V}_splits", LOUT]:
 print("OUT  :", OUT)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA ==============================
+# Cell 4: load + lock data
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -143,7 +133,7 @@ SIDS = [int(s) for s in S.index]; HIDS = [int(h) for h in df.hadm_id]
 print("subjects", len(SIDS), "| admissions with an image", len(HIDS))
 
 # %%
-# ============================== CELL 5 — BIGQUERY EXTRACTION (cached on Drive) ==============================
+# Cell 5: BigQuery extraction
 BQF = {k: DIRS["bq"] / f"{V}_bq_{k}.csv.gz" for k in ["admissions", "patients", "diagnoses", "icd_titles"]}
 BQ_SRC = DIRS["bq"] / f"{V}_bq_source.json"
 if LOCAL_TEST and os.environ.get("V3_BQ_DIR"):
@@ -217,7 +207,7 @@ if not all(f.exists() for f in BQF.values()):
                            "Check that GCP_PROJECT belongs to the account that just signed in and that the BigQuery API is enabled.")
     P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS)]
     P_H = [bigquery.ArrayQueryParameter("h", "INT64", HIDS)]
-    # --- discover extra candidate datasets (may be forbidden; that is fine) ---
+    # further candidate datasets (listing may be forbidden)
     cands = list(BQ_CANDIDATES)
     try:
         for ds in client.list_datasets(project="physionet-data"):
@@ -226,7 +216,7 @@ if not all(f.exists() for f in BQF.values()):
                 cands.insert(0, ("physionet-data." + n, "physionet-data." + n))
     except Exception as e:
         print("list_datasets not permitted (skipped):", repr(e)[:120])
-    # --- pick the dataset whose admissions match our hadm_id + admission date ---
+    # pick the dataset whose admissions match hadm_id and admission date
     checks, errs = [], []
     our = df.set_index("hadm_id")
     study = pd.to_datetime(our.StudyDate.astype(str), format="%Y%m%d")
@@ -247,7 +237,7 @@ if not all(f.exists() for f in BQF.values()):
     ok = [c for c in checks if c["found"] > 0.98 and max(c["date_match"], c["study_in_admission"]) > 0.95]
     if not ok:
         hint = ("\nIf the error is 403/Access Denied: the signed-in Google account has no access to physionet-data on BigQuery "
-                "(physionet.org → MIMIC-IV page → 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
+                "(physionet.org -> MIMIC-IV page -> 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
         raise RuntimeError(f"No BigQuery dataset matches the cohort.\nchecks={checks}\nerrors={errs}{hint}\nPlease report this full message.")
     src = max(ok, key=lambda c: (c["found"], c["date_match"], c["study_in_admission"]))
     hosp, core = src["hosp"], src["core"]
@@ -275,9 +265,9 @@ assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} cohort hadm_id values n
 print(f"admissions {len(adm)} (cohort subjects, all admissions) | diagnoses {len(dxs)} | titles {len(tit)}")
 
 # %%
-# ============================== CELL 6 — EXACT LABEL RULE (reconstructed from v3 tables) ==============================
-# Released labels = case-insensitive keyword match on ICD long titles of ONE admission; that admission is the subject's LAST
-# row in file order, and its labels (and EHR) were copied to every radiograph of the subject.
+# Cell 6: exact label rule
+# released labels: keyword match on the ICD long titles of one admission (the subject's last row in
+# file order), copied with its EHR values to every radiograph of the subject
 LABEL_RULE = {"pneumonia": r"pneumonia", "tuberculosis": r"tuberculosis", "bronchitis": r"bronchitis",
               "arthritis": r"arthritis", "fracture": r"fracture", "lung_cancer": r"malignant neoplasm",
               "scoliosis": r"scoliosis", "lung_infection": r"infection\s*$"}
@@ -310,7 +300,7 @@ recon_summary = {"subjects": len(last_h), "exact_all8_last_row": int(match_last.
 atomic_to_csv(RECON.round(5), DIRS["labels"] / f"{V}_label_reconstruction.csv")
 atomic_json(recon_summary, DIRS["labels"] / f"{V}_label_reconstruction_summary.json")
 print(RECON.round(4).to_string(index=False)); print(recon_summary)
-# titles matched by each rule (cohort subjects): shows what the label names really mean
+# titles matched by each rule (cohort subjects)
 trows = []
 for t in TARGETS:
     g = dxt[dxt[t]].groupby("long_title").subject_id.nunique().sort_values(ascending=False)
@@ -319,12 +309,12 @@ for t in TARGETS:
     print(f"[{t}] {len(g)} titles; top: " + "; ".join(f"{x[:38]} ({n})" for x, n in g.head(4).items()))
 atomic_to_csv(pd.DataFrame(trows), DIRS["labels"] / f"{V}_label_rule_titles.csv")
 if match_last.mean() < 0.99:
-    raise RuntimeError(f"The label rule matches only {match_last.mean():.3f} of patients (<0.99) — stopping; please report the output.")
+    raise RuntimeError(f"The label rule matches only {match_last.mean():.3f} of patients (<0.99) - stopping; please report the output.")
 P4_TARGETS = list(TARGETS)
 
-# ---- clinically cleaned label definition (own design; used only for P4_admission_clean) ----
-# drop non-diagnostic titles (history, screening, vaccination, tuberculin reaction, ...) and negated titles
-# ("... without (mention of) <disease>"); "lung_cancer" = primary lung/bronchus malignancy; "lung_infection" = lung/respiratory infection.
+# clean label definition (used for P4_admission_clean)
+# drop history, screening, vaccination, tuberculin-reaction and negated titles;
+# lung_cancer = lung/bronchus malignancy, lung_infection = lung/respiratory infection
 CLEAN_INCLUDE = {"pneumonia": r"pneumonia", "tuberculosis": r"tuberculosis", "bronchitis": r"bronchitis",
                  "arthritis": r"arthritis", "fracture": r"fracture", "lung_cancer": r"^malignant neoplasm.*(lung|bronch)",
                  "scoliosis": r"scoliosis",
@@ -340,7 +330,7 @@ ADMLAB_CLEAN = dxt.groupby("hadm_id")[[f"c_{t}" for t in TARGETS]].any().astype(
 ADMLAB_CLEAN.columns = TARGETS
 def adm_vec_clean(hadms):
     return ADMLAB_CLEAN.reindex(list(hadms)).fillna(0).astype(np.int8).values
-# semantic audit of the RELEASED labels: share of positive subjects whose label-source admission has a clean diagnosis
+# share of released positives whose source admission has a clean diagnosis
 src_rule, src_clean = adm_vec(last_h.values), adm_vec_clean(last_h.values)
 sem_rows = []
 for j, t in enumerate(TARGETS):
@@ -362,7 +352,7 @@ atomic_to_csv(pd.DataFrame(ctrows), DIRS["labels"] / f"{V}_clean_rule_titles.csv
 print("\nSemantic audit of released labels:\n", SEM.to_string(index=False))
 
 # %%
-# ============================== CELL 7 — REPAIRED (OWN-ADMISSION) LABELS + CORRUPTION AUDIT ==============================
+# Cell 7: repaired labels + corruption audit
 img = df[["dataset_position", "subject_id", "hadm_id", "dicom", "StudyDate", "study_year", "age"] + TARGETS].copy()
 img["admittime"] = img.hadm_id.map(admt)
 img.loc[img.admittime.isna(), "admittime"] = df.loc[img.admittime.isna(), "adm_date"]
@@ -407,7 +397,7 @@ atomic_to_csv(img[["dataset_position", "subject_id", "hadm_id", "dicom", "label_
 print(CORR.to_string(index=False)); print(corr_summary)
 
 # %%
-# ============================== CELL 8 — P5 TEMPORAL SPLIT (real calendar time) ==============================
+# Cell 8: P5 temporal split
 pt = pts.drop_duplicates("subject_id").set_index("subject_id")
 g0 = pt.anchor_year_group.astype(str).str.extract(r"(\d{4})")[0].astype(float)
 img["est_year"] = (img.subject_id.map(g0) + 1 + (img.study_year - img.subject_id.map(pt.anchor_year))).astype(float)
@@ -421,11 +411,11 @@ atomic_to_csv(man5, DIRS["manifests"] / f"{V}_folds_P5_temporal.csv")
 p5_report = man5.groupby("role").est_first_year.describe()[["count", "min", "50%", "max"]]
 p5_report = p5_report.join(S.join(man5.set_index("subject_id").role).groupby("role")[TARGETS].mean().mul(100).round(1))
 atomic_to_csv(p5_report.reset_index(), DIRS["manifests"] / f"{V}_P5_split_report.csv")
-print("estimated real year of each image:", img.est_year.min(), "–", img.est_year.max())
+print("estimated real year of each image:", img.est_year.min(), "-", img.est_year.max())
 print(p5_report.to_string())
 
 # %%
-# ============================== CELL 9 — TABLE, FEATURE SETS, SPLITS ==============================
+# Cell 9: table, feature sets, splits
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -494,7 +484,7 @@ G_FEATS = list(FEATSETS)
 if RUN_MODE == "preflight":
     for _p in ["P4_admission", "P1_admission", "P4_admission_clean"]: PROTO[_p]["folds"] = [0]
     G_FEATS = ["ehr", "img_raddino"]; CLFS = ["LR", "LGBM"]
-if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline test only
     for _p in ["P4_admission", "P1_admission", "P4_admission_clean"]: PROTO[_p]["folds"] = [0]
     CLFS = ["LR", "LGBM"]; G_FEATS = ["ehr", "img_raddino"]
 
@@ -520,7 +510,7 @@ if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
 # %%
-# ============================== CELL 10 — MODEL / SAMPLER / METRIC FUNCTIONS (same as v2) ==============================
+# Cell 10: model / sampler / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fs, pca_dim):
@@ -602,7 +592,7 @@ def strategies_for(has_disc):
     return ["none", "class_weight", "ROS", "SMOTENC_typeaware" if has_disc else "SMOTE"]
 
 # %%
-# ============================== CELL 11 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 11: stage A: preprocessing cache
 def prep_task(key, cache, featsets, pca_dim):
     sname, fold, feat = key
     out = Path(cache) / f"{V}_X" / f"{sname}__f{fold}__{feat}.npz"
@@ -634,10 +624,10 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 n_fits = sum(len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TASKS)
 sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15}
 eta = sum(sec[ft] * len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TODO) / NP / 60
-print(f"model fits: {n_fits} | ETA ≈ {eta:.0f} min with {NP} cores")
+print(f"model fits: {n_fits} | ETA ~ {eta:.0f} min with {NP} cores")
 
 # %%
-# ============================== CELL 12 — STAGE B: MODELS (resume-safe: 2 files per task on Drive) ==============================
+# Cell 12: stage B: models
 def model_task(task, cfg):
     protocol, fold, feat, target = task
     tag = f"{protocol}__f{fold}__{feat}__{target}"
@@ -695,7 +685,7 @@ for task, n_new, n_err in pbar:
 print(f"stage B: {(time.time() - t0) / 60:.1f} min | new fits {tot_new} | errors {tot_err}")
 
 # %%
-# ============================== CELL 13 — BASELINES (all-positive, EHR lookup, history) ==============================
+# Cell 13: baselines
 def f2_at(y, yhat):
     y = y.astype(bool); yhat = yhat.astype(bool)
     tp = (y & yhat).sum(); fp = (~y & yhat).sum(); fn = (y & ~yhat).sum(); d = 5 * tp + 4 * fn + fp
@@ -727,7 +717,7 @@ atomic_to_csv(BASE, DIRS["analysis"] / f"{V}_baselines.csv")
 print(BASE.groupby("protocol")[["trivial_f2", "lookup_f2", "lookup_any_f2", "lookup_hit_rate", "history_f2"]].mean().round(3))
 
 # %%
-# ============================== CELL 14 — MERGE + ANALYSIS ==============================
+# Cell 14: merge + analysis
 res_files = sorted(glob.glob(str(DIRS["results"] / f"{V}_*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(DIRS["errors"] / f"{V}_*.csv")))
@@ -751,7 +741,7 @@ if "P1_admission" in set(R.protocol):
     P1r = R.merge(sel1, on=KEY + ["strategy", "classifier"])
     TC = P1r.groupby(["feature_set", "target"])[["test_f2", "seen_f2", "unseen_f2", "unseen_trivial_f2", "seen_n", "unseen_n"]].mean()
     atomic_to_csv(TC.reset_index().round(4), DIRS["analysis"] / f"{V}_tableC_P1adm_seen_unseen.csv")
-    print("\nP1_admission — seen vs unseen patients (macro)\n", TC.groupby("feature_set").mean().round(3).to_string())
+    print("\nP1_admission - seen vs unseen patients (macro)\n", TC.groupby("feature_set").mean().round(3).to_string())
 print("\nMACRO (configuration selected on inner-validation F2)\n", TA.round(3).to_string())
 
 # --- patient-cluster bootstrap for the single temporal split (P5) ---
@@ -784,7 +774,7 @@ for p in [p for p in PROTO if PROTO[p]["split"] == "P5" and p in set(best.protoc
 BOOT = pd.DataFrame(boot_rows)
 if len(BOOT):
     atomic_to_csv(BOOT.round(4), DIRS["analysis"] / f"{V}_P5_bootstrap.csv")
-    print("\nP5 (single calendar-time split) — macro F2, 95% CI from patient-level bootstrap\n", BOOT.round(3).to_string(index=False))
+    print("\nP5 (single calendar-time split) - macro F2, 95% CI from patient-level bootstrap\n", BOOT.round(3).to_string(index=False))
 
 numbers = {"version": VERSION, "data_hash": data_hash, "bq_source": json.load(open(BQ_SRC)),
            "label_reconstruction": RECON.round(4).to_dict("records"), "label_reconstruction_summary": recon_summary,
@@ -796,8 +786,8 @@ numbers = {"version": VERSION, "data_hash": data_hash, "bq_source": json.load(op
            "versions": {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__, "sklearn": sklearn.__version__}}
 atomic_json(numbers, DIRS["analysis"] / f"{V}_paper_numbers.json")
 
-# --- one small zip to send back (tables + admission labels; no predictions) ---
-ZIP = OUT / f"{V}_for_claude.zip"
+# summary zip (tables and admission labels, no predictions)
+ZIP = OUT / f"{V}_summary.zip"
 tmpz = str(ZIP) + ".tmp"
 with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
     for d in ["labels", "manifests", "analysis"]:
@@ -809,9 +799,9 @@ os.replace(tmpz, ZIP)
 print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 15 — FLUSH TO DRIVE (required before closing the session) ==============================
+# Cell 15: flush to Drive
 if IN_COLAB:
     print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — download", ZIP.name, "from", OUT)
+    print("FLUSH DONE - download", ZIP.name, "from", OUT)

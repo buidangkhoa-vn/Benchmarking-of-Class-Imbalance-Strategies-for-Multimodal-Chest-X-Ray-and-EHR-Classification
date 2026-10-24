@@ -1,28 +1,23 @@
 # %% [markdown]
-# # MMMDA NB2 — Strong image embeddings for the 29,083 radiographs (GPU, optional)
+# # NB2: image embeddings (GPU)
 #
-# **Output** (used by NB1 through `EMBEDDINGS`):
-# `{EMB_ROOT}/raddino/emb.npy + ids.csv`, `{EMB_ROOT}/xrv_chex/emb.npy + ids.csv` (1024-d DenseNet features),
-# plus `xrv_chex/logits18.npy` to verify which TorchXRayVision weights produced the CSV's 18 image features.
+# Writes {EMB_ROOT}/raddino/emb.npy and {EMB_ROOT}/xrv_chex/emb.npy (1024-d DenseNet features), each with ids.csv,
+# and xrv_chex/logits18.npy for the provenance check of the 18 image columns in the CSV.
 #
-# **Needs**: MIMIC-CXR-JPG access (PhysioNet credentialed) and `mimic-cxr-2.0.0-metadata.csv.gz`
-# (maps dicom_id → study_id, ViewPosition). Image source, choose one in the control panel:
-# - `"drive"`: a folder on Drive with the MIMIC-CXR-JPG layout `files/pXX/pXXXXXXXX/sXXXXXXXX/<dicom>.jpg`
-#   (a resized copy is fine — it is the fastest option);
-# - `"gcs"`: the PhysioNet Google Cloud bucket (your Google account must be linked to PhysioNet and granted
-#   GCS access; requester-pays → needs a GCP project id). Fast (~10–20 min for 29k images);
-# - `"physionet"`: direct HTTPS download with your PhysioNet username/password (slow; multithreaded).
+# Needs MIMIC-CXR-JPG and mimic-cxr-2.0.0-metadata.csv.gz. IMAGE_SOURCE:
+# - "drive": a Drive folder with the MIMIC-CXR-JPG layout (files/pXX/pXXXXXXXX/sXXXXXXXX/<dicom>.jpg)
+# - "gcs": the PhysioNet bucket (requester pays, needs a GCP project)
+# - "physionet": HTTPS download with PhysioNet credentials (slow)
 #
-# Run `RUN_MODE="preflight"` first (256 images: demo images, timing, provenance check), then `"full"`.
-# Everything is resume-safe (per-shard files); re-run after a disconnect.
+# Run RUN_MODE = "preflight" (256 images) first, then "full". Shards are saved as they finish, so a rerun resumes.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE         = "preflight"          # "preflight" (256 images) | "full"
 DRIVE_ROOT       = "/content/drive/MyDrive/data_aug"
 CSV_PATH         = f"{DRIVE_ROOT}/x_ray_and_features_data.csv"
-# Folder "mimic-cxr-jpg-2.1.0.physionet.org" (shared with you on Drive). None = auto-detect after mounting.
-# If auto-detect fails: drive.google.com → "Shared with me" → right-click the folder → Organize → Add shortcut → My Drive.
+# MIMIC-CXR-JPG folder on Drive; None = search after mounting
+# if it is not found, add a shortcut to the shared folder in My Drive
 MIMIC_JPG_ROOT   = None                  # or e.g. "/content/drive/MyDrive/mimic-cxr-jpg-2.1.0.physionet.org"
 IMAGE_SOURCE     = "drive"               # "drive" (the shared folder above) | "gcs" | "physionet"
 GCS_BUCKET       = "gs://mimic-cxr-jpg-2.1.0.physionet.org"  # only for "gcs"
@@ -37,7 +32,7 @@ SHARD            = 2048
 DL_THREADS       = 32                    # download threads (I/O only)
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT + GPU ==============================
+# Cell 2: install + mount + GPU
 import os, sys, subprocess, importlib
 for mod, pkg in [("torchxrayvision", "torchxrayvision"), ("transformers", "transformers")]:
     try:
@@ -50,7 +45,7 @@ import torch
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", DEV, torch.cuda.get_device_name(0) if DEV == "cuda" else "", "| cores:", os.cpu_count())
 if DEV != "cuda":
-    print("WARNING: no GPU — switch runtime to a GPU (L4/A100) for the full run")
+    print("WARNING: no GPU - switch runtime to a GPU (L4/A100) for the full run")
 
 import glob
 def find_mimic_root():
@@ -69,15 +64,15 @@ if MIMIC_JPG_ROOT is None:
 if MIMIC_JPG_ROOT is None or not os.path.exists(f"{MIMIC_JPG_ROOT}/mimic-cxr-2.0.0-metadata.csv.gz"):
     raise FileNotFoundError(
         "Folder mimic-cxr-jpg-2.1.0.physionet.org not found in the mounted Drive.\n"
-        "Open drive.google.com → 'Shared with me' → right-click mimic-cxr-jpg-2.1.0.physionet.org → "
-        "Organize → Add shortcut → My Drive, then rerun this cell (or set MIMIC_JPG_ROOT by hand).")
+        "Open drive.google.com -> 'Shared with me' -> right-click mimic-cxr-jpg-2.1.0.physionet.org -> "
+        "Organize -> Add shortcut -> My Drive, then rerun this cell (or set MIMIC_JPG_ROOT by hand).")
 META_PATH = f"{MIMIC_JPG_ROOT}/mimic-cxr-2.0.0-metadata.csv.gz"
 IMAGE_ROOT_DRIVE = f"{MIMIC_JPG_ROOT}/files"
 print("MIMIC_JPG_ROOT  :", MIMIC_JPG_ROOT)
 print("metadata exists :", os.path.exists(META_PATH), "| files/ exists:", os.path.isdir(IMAGE_ROOT_DRIVE))
 
 # %%
-# ============================== CELL 3 — DICOM LIST + METADATA ==============================
+# Cell 3: DICOM list + metadata
 import json, time, glob, shutil
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -91,7 +86,7 @@ meta = meta.rename(columns={"dicom_id": "dicom", "subject_id": "subject_id_meta"
 m = df.merge(meta, on="dicom", how="left")
 missing = m.study_id.isna().sum()
 print("dicoms without metadata:", missing)
-assert missing == 0, "metadata does not cover every dicom — check META_PATH"
+assert missing == 0, "metadata does not cover every dicom - check META_PATH"
 assert (m.subject_id == m.subject_id_meta).all()
 m["relpath"] = ("p" + m.subject_id.astype(str).str[:2] + "/p" + m.subject_id.astype(str) + "/s" +
                 m.study_id.astype(int).astype(str) + "/" + m.dicom + ".jpg")
@@ -101,14 +96,14 @@ Path(EMB_ROOT).mkdir(parents=True, exist_ok=True)
 _meta_path = f"{EMB_ROOT}/dicom_meta.csv"
 if not (os.path.exists(_meta_path) and len(pd.read_csv(_meta_path, usecols=["dicom"])) == len(m)):
     m[["dicom", "subject_id", "study_id", "ViewPosition", "relpath"]].to_csv(_meta_path + ".tmp", index=False)
-    os.replace(_meta_path + ".tmp", _meta_path)   # atomic: NB1 may read this file concurrently
+    os.replace(_meta_path + ".tmp", _meta_path)   # atomic write (NB1 may read it)
 view.rename("n").to_frame().to_csv(f"{EMB_ROOT}/view_position_counts.csv")
 
 work = m if RUN_MODE == "full" else m.sample(256, random_state=0)
 print("images to process:", len(work))
 
 # %%
-# ============================== CELL 4 — FETCH IMAGES TO LOCAL DISK (I/O threads) ==============================
+# Cell 4: fetch images to local disk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 Path(LOCAL_IMG).mkdir(parents=True, exist_ok=True)
 todo = [r for r in work[["dicom", "relpath"]].itertuples(index=False) if not os.path.exists(f"{LOCAL_IMG}/{r.dicom}.jpg")]
@@ -118,7 +113,7 @@ def _done(dicom):
     return os.path.exists(f"{LOCAL_IMG}/{dicom}.jpg")
 
 if todo and IMAGE_SOURCE == "drive":
-    # probe: first images must exist on Drive; measure speed for an ETA
+    # check the first images and time them
     t_probe = time.time(); sizes = []
     for r in todo[:20]:
         p = f"{IMAGE_ROOT_DRIVE}/{r.relpath}"
@@ -175,10 +170,10 @@ elif todo and IMAGE_SOURCE == "physionet":
 
 still = [d for d in work.dicom if not _done(d)]
 print("missing local images:", len(still))
-assert not still, "some images are missing — re-run this cell (resume-safe) or check access"
+assert not still, "some images are missing - re-run this cell (resume-safe) or check access"
 
 # %%
-# ============================== CELL 5 — DEMO IMAGES (check before the long run) ==============================
+# Cell 5: demo images
 import matplotlib.pyplot as plt
 from PIL import Image
 demo = work.head(6)
@@ -190,7 +185,7 @@ for ax, r in zip(axes, demo.itertuples()):
 plt.show()
 
 # %%
-# ============================== CELL 6 — EXTRACT EMBEDDINGS (resume-safe shards) ==============================
+# Cell 6: extract embeddings
 import torchxrayvision as xrv
 import torchvision
 from torch.utils.data import Dataset, DataLoader
@@ -248,7 +243,7 @@ def run_model(name, dicoms):
             np.save(out / "shards" / f"{s:04d}_logits.tmp.npy", L); os.replace(out / "shards" / f"{s:04d}_logits.tmp.npy", out / "shards" / f"{s:04d}_logits.npy")
         if s == 0:
             el = time.time() - t0
-            print(f"{name}: first shard {el:.0f}s → ETA ≈ {el * n_sh / 60:.0f} min")
+            print(f"{name}: first shard {el:.0f}s -> ETA ~ {el * n_sh / 60:.0f} min")
     E = np.concatenate([np.load(out / "shards" / f"{s:04d}_emb.npy") for s in range(n_sh)])
     assert len(E) == len(dicoms) and np.isfinite(E.astype(np.float32)).all()
     np.save(out / "emb.npy", E)
@@ -265,7 +260,7 @@ def run_model(name, dicoms):
 outs = {name: run_model(name, work.dicom.values) for name in MODELS}
 
 # %%
-# ============================== CELL 7 — PROVENANCE CHECK (which weights made the CSV's 18 features?) ==============================
+# Cell 7: provenance check
 for name, out in outs.items():
     if not name.startswith("xrv"):
         continue

@@ -15,7 +15,6 @@ def convert(src_path, out_path, gpu=False):
             lines = [re.sub(r'^# ?', '', l) for l in body.splitlines()]
             cells.append({"cell_type": "markdown", "metadata": {}, "source": "\n".join(lines)})
         else:
-            # drop local-test hooks from the delivered notebook? keep: they are inert on Colab
             cells.append({"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [], "source": body})
     for c in cells:
         lines = c["source"].split("\n")

@@ -1,28 +1,18 @@
 # %% [markdown]
-# # STEP 8 (v8) — PCA sensitivity, age/history baselines, second CV seed, Brier scores
+# # STEP 8 (v8): PCA size, age vs history, second fold seed, Brier score
 #
-# **Purpose** (answers the merged review, B2/B4/B6/B7). Logistic regression only, so the run is short.
-# 1. **PCA sensitivity (B4).** RAD-DINO image and fusion inputs with 32, 64 and 128 principal components and without PCA
-#    (768 standardised dimensions), under P2 (released labels), P4 (admission-aligned) and P4-C (clean).
-# 2. **What the history gain comes from (B6).** Under P4 / P4-C: released age only, age at the radiograph's own admission only,
-#    prior-diagnosis flags only, and age-at-own-admission + flags (the paper's history vector). Released vs own-admission age
-#    is the same variable before and after time alignment.
-# 3. **Second cross-validation seed (B2).** Patient-grouped folds rebuilt with seed 43 (same algorithm as seed 42), for EHR,
-#    RAD-DINO image/fusion (64 PCs) and the history vector; under P2 also class weighting, ROS and SMOTE/SMOTE-NC. The same
-#    configurations are run on the seed-42 folds in this notebook, so the two repetitions can be compared with the corrected
-#    repeated k-fold t-test.
-# 4. **Brier score (B7)** for every fit, next to the Brier score of predicting the training prevalence.
+# Logistic regression, no augmentation unless noted; P2 (released labels), P4 (A) and P4-C (C).
+# 1. RAD-DINO image and fusion inputs with 32, 64 and 128 PCs and without PCA (768 dimensions).
+# 2. P4 / P4-C: released age, age at the radiograph's own admission, prior-diagnosis flags, and age + flags.
+# 3. Patient folds rebuilt with seed 43 for EHR, RAD-DINO image/fusion (64 PCs) and age + flags; under P2 also class
+#    weighting, ROS and SMOTE/SMOTE-NC. The same runs on the seed-42 folds give a repeated cross-validation.
+# 4. Brier score of every fit and of predicting the training prevalence.
 #
-# **How to run** — secondary account (Colab Pro), Runtime **CPU, High-RAM** → **Run all**. No BigQuery, nothing to edit.
-# - Needs on Drive (all from earlier runs): `data_aug/x_ray_and_features_data.csv`, `data_aug/embeddings/raddino`,
-#   v2 fold manifests, STEP5 labels (`MMMDA_runs/v4_2026-10-19_admlabels/v4_labels`), v3 BigQuery tables (`MMMDA_runs/v3_2026-10-19_P4P5/v3_bq`).
-# - Expected time: ~20–30 min with 8+ cores. If the session drops: Run all again (finished tasks are skipped).
-# - Done when `FLUSH DONE` appears. Download **one file** `v8_for_claude.zip` to `D:\project_TTNT_Data_aug\analysis_v8\`.
-#
-# Every folder/file this notebook creates carries the version prefix `v8`.
+# Run all (CPU, high RAM). Needs the CSV, embeddings/raddino, the v2 fold manifests, the STEP5 labels and the v3 BigQuery
+# tables on Drive. About 20-30 min with 8 cores. A rerun skips finished tasks. Output names start with v8.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
 VERSION       = "v8_2026-10-22"
 
@@ -38,7 +28,7 @@ LOCAL_CACHE   = "/content/mmmda_v8_cache"
 N_PAR         = None                  # parallel processes; None = all cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("V8_LOCAL_TEST") == "1"           # offline test only
@@ -57,7 +47,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| VERSION:", VERSION)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob, zipfile
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -97,12 +87,12 @@ for d in list(DIRS.values()) + [CACHE / f"{V}_X", CACHE / f"{V}_splits"]:
 print("OUT  :", OUT)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA, LABELS, TIME-ALIGNED AGE ==============================
+# Cell 4: load + lock data, labels, time-aligned age
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 EHR_CONT = ["age", "oxygen", "heart_rate", "temperature", "hemoglobin", "rbc", "wbc"]
 EHR_BIN  = ["diabete", "hiv", "smoke", "cough"]
@@ -125,7 +115,7 @@ for t in TARGETS:
 np.savez(CACHE / f"{V}_labels.npz", **lab)
 
 # %%
-# ============================== CELL 5 — TABLE, FEATURE SETS, SPLITS (seed 42 and seed 43), TASKS ==============================
+# Cell 5: table, feature sets, splits, tasks
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -204,7 +194,7 @@ n_fits = sum(len(PROTO[p]["feats"][ft]) for p, _, ft, _ in TASKS)
 print(f"tasks {len(TASKS)} | fits {n_fits} | skipped (too few positives) {len(skipped)}")
 
 # %%
-# ============================== CELL 6 — MODEL / SAMPLER / METRIC FUNCTIONS (same as the paper) ==============================
+# Cell 6: model / sampler / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fset):
@@ -271,7 +261,7 @@ def metric_block(y, p, thr, prefix, p_train):
     return {f"{prefix}_{k}": v for k, v in out.items()}
 
 # %%
-# ============================== CELL 7 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 7: stage A: preprocessing cache
 def prep_task(key, cache, featsets):
     sname, fold, feat = key
     out = Path(cache) / f"{V}_X" / f"{sname}__f{fold}__{feat}.npz"
@@ -301,7 +291,7 @@ Parallel(n_jobs=min(NP, max(1, len(prep_keys))))(delayed(prep_task)(k, str(CACHE
 print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 
 # %%
-# ============================== CELL 8 — STAGE B: LOGISTIC REGRESSION FITS (resume-safe: 1 file per task) ==============================
+# Cell 8: stage B: logistic regression fits
 def model_task(task, cfg):
     protocol, fold, feat, target = task
     tag = f"{protocol}__f{fold}__{feat}__{target}"
@@ -350,7 +340,7 @@ for task, n_new, n_err in pbar:
 print(f"stage B: {(time.time() - t0) / 60:.1f} min | new fits {tot_new} | errors {tot_err}")
 
 # %%
-# ============================== CELL 9 — MERGE + QUICK SUMMARY + ZIP ==============================
+# Cell 9: merge + quick summary + zip
 res_files = sorted(glob.glob(str(DIRS["results"] / f"{V}_*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(DIRS["errors"] / f"{V}_*.csv")))
@@ -374,7 +364,7 @@ numbers = {"version": VERSION, "data_hash": data_hash, "n_fits": len(R), "n_expe
            "seed43_identical_roles": float(same),
            "versions": {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__, "sklearn": sklearn.__version__}}
 atomic_json(numbers, DIRS["analysis"] / f"{V}_paper_numbers.json")
-ZIP = OUT / f"{V}_for_claude.zip"
+ZIP = OUT / f"{V}_summary.zip"
 tmpz = str(ZIP) + ".tmp"
 with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
     for d in ["manifests", "analysis"]:
@@ -385,9 +375,9 @@ os.replace(tmpz, ZIP)
 print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 10 — FLUSH TO DRIVE (required before closing the tab) ==============================
+# Cell 10: flush to Drive
 if IN_COLAB:
     print("Flushing all files to Google Drive... do NOT close the tab until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — download", ZIP.name, "from", OUT)
+    print("FLUSH DONE - download", ZIP.name, "from", OUT)

@@ -1,21 +1,16 @@
 # %% [markdown]
-# # STEP 4a (v3) — Extract four MIMIC-IV tables from BigQuery with the PhysioNet-credentialed account
+# # STEP 4a (v3): BigQuery extraction with the PhysioNet-credentialed account
 #
-# Use only if the account that runs Colab (STEP4) has **no** PhysioNet access on BigQuery and the code-paste login in STEP4 fails.
-#
-# 1. Open this notebook in Colab **with <your PhysioNet-credentialed Google account>** (the account with PhysioNet access). Free Colab is enough; CPU runtime, ~5 min.
-# 2. Set `GCP_PROJECT` (placeholder `YOUR_GCP_PROJECT_ID`) → **Run all**.
-# 3. When prompted, upload `x_ray_and_features_data.csv`; in the Google sign-in window choose the credentialed account and grant all permissions.
-# 4. The browser then downloads `v3_bq_extract.zip` (~10 MB).
-# 5. Upload that zip to the Google Drive **of the account that runs STEP4**, folder `MyDrive/data_aug/MMMDA_runs/` → open STEP4 → Run all.
-#
-# This notebook writes nothing to the Drive of the credentialed account.
+# Only needed if STEP4 cannot sign in to BigQuery. Open this notebook with the credentialed account (free Colab, CPU,
+# about 5 min), set GCP_PROJECT, Run all, upload x_ray_and_features_data.csv when asked and allow access in the sign-in
+# window. The browser then downloads v3_bq_extract.zip (about 10 MB). Put it in MyDrive/data_aug/MMMDA_runs/ of the
+# account that runs STEP4 and rerun STEP4. Nothing is written to the Drive of the credentialed account.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of <your PhysioNet-credentialed Google account>
+# Cell 1: control panel
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project with PhysioNet access
 VERSION       = "v3_2026-10-19"
-BQ_AUTH       = "same_account"        # this notebook runs under the credentialed account itself -> standard sign-in window
+BQ_AUTH       = "same_account"        # run under the credentialed account
 EXPECTED_HASH = "da85519958e4bccb"
 BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1_hosp"),
                  ("physionet-data.mimiciv_2_2_hosp", "physionet-data.mimiciv_2_2_hosp"),
@@ -24,7 +19,7 @@ BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1
                  ("physionet-data.mimic_hosp",       "physionet-data.mimic_core")]    # (hosp: diagnoses, core: admissions/patients)
 
 # %%
-# ============================== CELL 2 — SETUP + UPLOAD CSV ==============================
+# Cell 2: setup + upload CSV
 import os, sys, re, json, time, hashlib, shutil, zipfile, subprocess, importlib
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -62,12 +57,12 @@ DIRS = {"bq": OUT / f"{V}_bq"}
 DIRS["bq"].mkdir(parents=True, exist_ok=True)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA ==============================
+# Cell 4: load + lock data
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -84,7 +79,7 @@ SIDS = [int(s) for s in S.index]; HIDS = [int(h) for h in df.hadm_id]
 print("subjects", len(SIDS), "| admissions with an image", len(HIDS))
 
 # %%
-# ============================== CELL 5 — BIGQUERY EXTRACTION (cached on Drive) ==============================
+# Cell 5: BigQuery extraction
 BQF = {k: DIRS["bq"] / f"{V}_bq_{k}.csv.gz" for k in ["admissions", "patients", "diagnoses", "icd_titles"]}
 BQ_SRC = DIRS["bq"] / f"{V}_bq_source.json"
 if LOCAL_TEST and os.environ.get("V3_BQ_DIR"):
@@ -145,7 +140,7 @@ if not all(f.exists() for f in BQF.values()):
                            "Check that GCP_PROJECT belongs to the account that just signed in and that the BigQuery API is enabled.")
     P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS)]
     P_H = [bigquery.ArrayQueryParameter("h", "INT64", HIDS)]
-    # --- discover extra candidate datasets (may be forbidden; that is fine) ---
+    # further candidate datasets (listing may be forbidden)
     cands = list(BQ_CANDIDATES)
     try:
         for ds in client.list_datasets(project="physionet-data"):
@@ -154,7 +149,7 @@ if not all(f.exists() for f in BQF.values()):
                 cands.insert(0, ("physionet-data." + n, "physionet-data." + n))
     except Exception as e:
         print("list_datasets not permitted (skipped):", repr(e)[:120])
-    # --- pick the dataset whose admissions match our hadm_id + admission date ---
+    # pick the dataset whose admissions match hadm_id and admission date
     checks, errs = [], []
     our = df.set_index("hadm_id")
     study = pd.to_datetime(our.StudyDate.astype(str), format="%Y%m%d")
@@ -175,7 +170,7 @@ if not all(f.exists() for f in BQF.values()):
     ok = [c for c in checks if c["found"] > 0.98 and max(c["date_match"], c["study_in_admission"]) > 0.95]
     if not ok:
         hint = ("\nIf the error is 403/Access Denied: the signed-in Google account has no access to physionet-data on BigQuery "
-                "(physionet.org → MIMIC-IV page → 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
+                "(physionet.org -> MIMIC-IV page -> 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
         raise RuntimeError(f"No BigQuery dataset matches the cohort.\nchecks={checks}\nerrors={errs}{hint}\nPlease report this full message.")
     src = max(ok, key=lambda c: (c["found"], c["date_match"], c["study_in_admission"]))
     hosp, core = src["hosp"], src["core"]
@@ -203,7 +198,7 @@ assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} cohort hadm_id values n
 print(f"admissions {len(adm)} (cohort subjects, all admissions) | diagnoses {len(dxs)} | titles {len(tit)}")
 
 # %%
-# ============================== CELL 5 — ZIP + DOWNLOAD ==============================
+# Cell 5: zip + download
 ZIP = Path(OUT_ROOT) / f"{V}_bq_extract.zip"
 with zipfile.ZipFile(str(ZIP) + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
     for f in list(BQF.values()) + [BQ_SRC]:

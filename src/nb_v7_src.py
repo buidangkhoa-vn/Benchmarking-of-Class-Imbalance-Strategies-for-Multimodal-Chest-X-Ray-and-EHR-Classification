@@ -1,28 +1,18 @@
 # %% [markdown]
-# # STEP 7 (v7) — Hyperparameter ablation + radiographs aligned with the source admission
+# # STEP 7 (v7): tuned classifiers and the aligned subset
 #
-# **Purpose** (answers two review comments):
-# 1. **Hyperparameters.** The tree models in the paper use default settings (RF/ET `max_depth=None`, `min_samples_leaf=1`;
-#    LightGBM `max_depth=-1`, `min_child_samples=20`). This notebook adds regularised configurations
-#    (`max_depth` ∈ {3, 5}, `min_samples_leaf` / `min_child_samples` ∈ {20, 50}) and LR with `C` ∈ {1, 0.1, 0.01},
-#    selected on inner validation as in the paper. Questions: do regularised trees catch up with LR once patients are separated,
-#    and does the tree advantage under the record split (P1) shrink when trees can no longer memorise patients?
-# 2. **EHR misaligned with the labels.** With admission-level labels (A, C), the 11 EHR variables still come from the patient's "source" admission.
-#    Only 36% of radiographs (one per patient) belong to the source admission — for them image, EHR and label refer to the same admission.
-#    The notebook (a) reports results separately for aligned / misaligned test radiographs of P2/P4/P4-C and (b) reruns everything
-#    on the aligned radiographs only (`P2al_adm`, `P2al_cln`, same patient folds as P2).
+# 1. Classifier settings: RF/ET with max_depth in {3, 5} or min_samples_leaf in {20, 50}, LightGBM with max_depth in {3, 5}
+#    or min_child_samples = 50, the default trees, and LR with C in {1, 0.1, 0.01}, selected on inner validation.
+#    P1, P2, P4 and P4-C; EHR and RAD-DINO fusion; no augmentation.
+# 2. Aligned subset: radiographs whose own admission is the source of the released labels and EHR values (one per
+#    patient). Test results are split into aligned and other radiographs, and P2al_adm / P2al_cln use the aligned
+#    radiographs only (P2 patient folds).
 #
-# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** (more cores = faster) → **Run all**.
-# No BigQuery, nothing to edit.
-# - Needs on Drive (all from earlier runs): `data_aug/x_ray_and_features_data.csv`, `data_aug/embeddings/raddino`,
-#   v2 folds (`leakage_aware_v2/.../manifests`), STEP5 labels (`MMMDA_runs/v4_2026-10-19_admlabels/v4_labels`).
-# - Expected time: ~25–40 min with 48 cores, ~2 h with 8 cores. If the session drops: Run all again (finished tasks are skipped).
-# - Done when `FLUSH DONE` appears. The summary archive is `v7_for_claude.zip` in the output folder.
-#
-# Every folder/file this notebook creates carries the version prefix `v7`.
+# Run all (CPU, high RAM). Needs the CSV, embeddings/raddino, the v2 fold manifests and the STEP5 labels on Drive.
+# About 25-40 min with 48 cores, 2 h with 8. A rerun skips finished tasks. Output names start with v7.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
 VERSION       = "v7_2026-10-22"       # version tag: part of every folder/file name this notebook creates
 
@@ -38,7 +28,7 @@ LOCAL_CACHE   = "/content/mmmda_v7_cache"
 N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("V7_LOCAL_TEST") == "1"           # offline test only
@@ -57,7 +47,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| VERSION:", VERSION)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob, shutil, zipfile
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -98,12 +88,12 @@ for d in list(DIRS.values()) + [CACHE / f"{V}_X", CACHE / f"{V}_splits"]:
 print("OUT  :", OUT)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA, LABELS, ALIGNED SUBSET ==============================
+# Cell 4: load + lock data, labels, aligned subset
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 EHR_CONT = ["age", "oxygen", "heart_rate", "temperature", "hemoglobin", "rbc", "wbc"]
 EHR_BIN  = ["diabete", "hiv", "smoke", "cough"]
@@ -126,7 +116,7 @@ agree = np.mean([(lab[f"adm__{t}"][ALIGNED] == lab[f"rel__{t}"][ALIGNED]).mean()
 print(f"on aligned radiographs, admission-aligned label == released label: {agree:.4%}")
 
 # %%
-# ============================== CELL 5 — TABLE, FEATURE SETS, SPLITS, TASKS ==============================
+# Cell 5: table, feature sets, splits, tasks
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -178,7 +168,7 @@ PROTO = {"P1_rel":   dict(split="P1",   label="rel", feats=["ehr", "fusion_raddi
          "P2al_adm": dict(split="P2al", label="adm", feats=["ehr", "img_raddino", "fusion_raddino"]),
          "P2al_cln": dict(split="P2al", label="cln", feats=["ehr", "img_raddino", "fusion_raddino"])}
 FOLDS = list(range(5))
-# classifier configurations (strategy = none); *_default = the configuration used in the paper
+# classifier configurations (strategy = none); *_default = paper setting
 CONFIGS = {"LR_C1_default": ("LR", dict(C=1.0)), "LR_C0.1": ("LR", dict(C=0.1)), "LR_C0.01": ("LR", dict(C=0.01)),
            "RF_default": ("RF", dict(max_depth=None, min_samples_leaf=1)), "RF_depth5": ("RF", dict(max_depth=5, min_samples_leaf=1)),
            "RF_depth3": ("RF", dict(max_depth=3, min_samples_leaf=1)), "RF_leaf20": ("RF", dict(max_depth=None, min_samples_leaf=20)),
@@ -193,7 +183,7 @@ CONFIGS = {"LR_C1_default": ("LR", dict(C=1.0)), "LR_C0.1": ("LR", dict(C=0.1)),
 CFG_NAMES = list(CONFIGS)
 if RUN_MODE == "preflight":
     FOLDS = [0]; CFG_NAMES = ["LR_C1_default", "RF_depth5", "ET_leaf20", "LGBM_depth3"]
-if LOCAL_TEST and os.environ.get("V7_TINY") == "1":       # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("V7_TINY") == "1":       # offline test only
     FOLDS = [0]; CFG_NAMES = ["LR_C1_default", "LR_C0.1", "RF_depth3", "ET_leaf50", "LGBM_depth3", "LGBM_default"]
 
 TASKS, skipped = [], []
@@ -216,7 +206,7 @@ if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
 # %%
-# ============================== CELL 6 — MODEL / METRIC FUNCTIONS (same preprocessing and threshold rule as the paper) ==============================
+# Cell 6: model / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fs, pca_dim):
@@ -259,7 +249,7 @@ def metric_block(y, p, thr, prefix):
     return {f"{prefix}_{k}": v for k, v in out.items()}
 
 # %%
-# ============================== CELL 7 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 7: stage A: preprocessing cache
 def prep_task(key, cache, featsets, pca_dim):
     sname, fold, feat = key
     out = Path(cache) / f"{V}_X" / f"{sname}__f{fold}__{feat}.npz"
@@ -287,10 +277,10 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 sec = {"ehr": 2.5, "img_raddino": 8, "fusion_raddino": 9}
 scale = {"P1": 1.0, "P2": 1.0, "P2al": 0.4}
 eta = sum(sec[ft] * scale[PROTO[p]["split"]] * len(CFG_NAMES) for p, _, ft, _ in TODO) / NP / 60
-print(f"ETA ≈ {eta:.0f} min with {NP} cores")
+print(f"ETA ~ {eta:.0f} min with {NP} cores")
 
 # %%
-# ============================== CELL 8 — STAGE B: MODELS (resume-safe: 1 file per task on Drive) ==============================
+# Cell 8: stage B: models
 def model_task(task, cfg):
     protocol, fold, feat, target = task
     tag = f"{protocol}__f{fold}__{feat}__{target}"
@@ -342,7 +332,7 @@ for task, n_new, n_err in pbar:
 print(f"stage B: {(time.time() - t0) / 60:.1f} min | new fits {tot_new} | errors {tot_err}")
 
 # %%
-# ============================== CELL 9 — MERGE + QUICK SUMMARY ==============================
+# Cell 9: merge + quick summary
 res_files = sorted(glob.glob(str(DIRS["results"] / f"{V}_*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(DIRS["errors"] / f"{V}_*.csv")))
@@ -400,8 +390,8 @@ numbers = {"version": VERSION, "data_hash": data_hash, "n_fits": len(R), "n_expe
            "versions": {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__, "sklearn": sklearn.__version__}}
 atomic_json(numbers, DIRS["analysis"] / f"{V}_paper_numbers.json")
 
-# --- one small zip to send back (results + tables; no data, no predictions) ---
-ZIP = OUT / f"{V}_for_claude.zip"
+# summary zip (results and tables, no predictions)
+ZIP = OUT / f"{V}_summary.zip"
 tmpz = str(ZIP) + ".tmp"
 with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
     for d in ["manifests", "analysis"]:
@@ -412,9 +402,9 @@ os.replace(tmpz, ZIP)
 print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 10 — FLUSH TO DRIVE (required before closing the session) ==============================
+# Cell 10: flush to Drive
 if IN_COLAB:
     print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — download", ZIP.name, "from", OUT)
+    print("FLUSH DONE - download", ZIP.name, "from", OUT)

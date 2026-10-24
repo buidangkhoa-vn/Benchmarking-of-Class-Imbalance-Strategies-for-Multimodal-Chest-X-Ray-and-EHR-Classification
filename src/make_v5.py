@@ -12,35 +12,26 @@ def cell(marker):
     hit = [c for c in cells if marker in c]
     assert len(hit) == 1, marker
     return hit[0]
-AUTH = "".join(lines[184:219])          # v4 lines 185-219: bigquery import, auth (other_account / same_account), bq(), SESSION_USER check
+i0 = next(i for i, l in enumerate(lines) if l.strip() == "from google.cloud import bigquery")
+AUTH = "".join(lines[i0:i0 + 35])          # bigquery import, sign-in, bq(), SESSION_USER check
 assert AUTH.lstrip().startswith("from google.cloud import bigquery") and "SESSION_USER" in AUTH
 
 intro = r'''# %% [markdown]
-# # STEP 6 (v5) — CheXpert report labels (one per radiograph): record split (P1) vs. patient split (P2)
+# # STEP 6 (v5): CheXpert report labels and time-aligned EHR history
 #
-# **Purpose.** Test the paper's conclusions on a second label source that is defined per radiograph: the CheXpert labels
-# (U-zeros) that MIMIC-CXR-JPG provides for the same 29,083 radiographs of the cohort. Questions:
-# 1. With per-radiograph labels, how much does the record split (P1) still inflate results compared with the patient split (P2)?
-# 2. Do the imbalance strategies help with these labels?
-# 3. How do the image inputs (11 scores, RAD-DINO) compare with EHR?
+# CheXpert labels (U-zeros) of the same 29,083 radiographs under record folds (P1) and patient folds (P2): inflation from
+# the record split, strategy effects, and image vs EHR with labels defined per radiograph.
+# Also P4_hist / P4C_hist: A and C labels with age at the radiograph's own admission and 8 prior-diagnosis flags (earlier
+# admissions only), alone and fused with RAD-DINO, on the P2 folds.
 #
-# Also adds **time-aligned EHR** experiments: with the admission-aligned (A) and clean (C) labels of STEP5, the 11 released EHR
-# variables are replaced by features known at imaging time: age at the radiograph's own admission + 8 flags "diagnosed in an EARLIER admission"
-# (`P4_hist`, `P4C_hist`, on the P2 folds), alone and fused with RAD-DINO.
-#
-# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** → **Run all**. Nothing to edit.
-# - The notebook finds the `mimic-cxr-jpg-2.1.0.physionet.org` folder on Drive (as in STEP1) and reads `mimic-cxr-2.0.0-chexpert.csv.gz`
-#   + `mimic-cxr-2.0.0-metadata.csv.gz`. Only if the CheXpert file is missing does it query BigQuery (link → choose
-#   <your PhysioNet-credentialed Google account> → paste the code), as in STEP4.
-# - Needs the STEP5 output folder (`MMMDA_runs/v4_2026-10-19_admlabels`) and the v3 BigQuery tables (`MMMDA_runs/v3_2026-10-19_P4P5/v3_bq`) on Drive.
-# - Expected time ~90–110 min with 8 cores. If the session drops: Run all again (finished tasks are skipped).
-# - Done when `FLUSH DONE` appears. The summary archive is `v5_for_claude.zip` in the output folder.
-#
-# Every folder/file this notebook creates carries the version prefix `v5`.
+# Run all (CPU, high RAM). Reads mimic-cxr-2.0.0-chexpert.csv.gz and mimic-cxr-2.0.0-metadata.csv.gz from the
+# MIMIC-CXR-JPG folder on Drive and falls back to BigQuery if the CheXpert file is missing. Needs the STEP5 outputs
+# (MMMDA_runs/v4_2026-10-19_admlabels) and the v3 tables (MMMDA_runs/v3_2026-10-19_P4P5/v3_bq).
+# About 90-110 min with 8 cores; a rerun skips finished tasks. Output names start with v5.
 
 '''
 control = r'''# %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
 VERSION       = "v5_2026-10-19"       # version tag: part of every folder/file name this notebook creates
 MIMIC_JPG_ROOT = None                 # None = search automatically; or e.g. "/content/drive/MyDrive/MIMIC_CXR/mimic-cxr-jpg-2.1.0.physionet.org"
@@ -66,17 +57,17 @@ CX_TARGETS = {"cx_pneumonia": "Pneumonia", "cx_lung_opacity": "Lung Opacity", "c
 N_PAR         = None                  # number of parallel processes; None = all cores
 
 '''
-setup = cell("CELL 2 — INSTALL + MOUNT").replace(
+setup = cell("Cell 2: install + mount").replace(
     '''    V2_RECFOLDS = os.environ.get("V3_V2RECFOLDS", ""); PREV_BQ_DIRS = [x for x in os.environ.get("V3_PREVBQ", "").split(",") if x]''',
     '''    V2_RECFOLDS = os.environ.get("V3_V2RECFOLDS", ""); V4_ADMLABELS = os.environ["V5_ADMLABELS"]; V3_BQ_DIR = os.environ["V5_BQDIR"]''')
-helpers = cell("CELL 3 — IMPORTS + HELPERS").replace('V = "v4"', 'V = "v5"').replace(
+helpers = cell("Cell 3: imports + helpers").replace('V = "v4"', 'V = "v5"').replace(
     'OUT = Path(OUT_ROOT) / (f"{VERSION}_admlabels" + ("_preflight" if RUN_MODE == "preflight" else ""))',
     'OUT = Path(OUT_ROOT) / (f"{VERSION}_chexpert" + ("_preflight" if RUN_MODE == "preflight" else ""))')
 assert 'V = "v5"' in helpers and "_chexpert" in helpers
-load = cell("CELL 4 — LOAD + LOCK DATA")
+load = cell("Cell 4: load + lock data")
 
 chex = r'''# %%
-# ============================== CELL 5 — CHEXPERT LABELS (Drive first, BigQuery fallback) ==============================
+# Cell 5: CheXpert labels
 LABF = DIRS["labels"] / f"{V}_chexpert_cohort_studies.csv.gz"     # chexpert rows of the cohort's studies
 MAPF = DIRS["labels"] / f"{V}_dicom_study_map.csv.gz"             # dicom -> study_id for the cohort's radiographs
 CX_SRC = DIRS["labels"] / f"{V}_chexpert_source.json"
@@ -173,7 +164,7 @@ print(CXSUM.to_string(index=False))
 
 '''
 table = r'''# %%
-# ============================== CELL 6 — TABLE, FEATURE SETS, SPLITS ==============================
+# Cell 6: table, feature sets, splits
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -245,7 +236,7 @@ G_FEATS = list(FEATSETS)
 if RUN_MODE == "preflight":
     for _p in PROTO: PROTO[_p]["folds"] = [0]
     G_FEATS = ["ehr", "img_raddino", "ehrhist_a", "ehrhist_c"]; CLFS = ["LR", "LGBM"]
-if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline test only
     for _p in PROTO: PROTO[_p]["folds"] = [0]
     CLFS = ["LR", "LGBM"]; G_FEATS = ["ehr", "img_raddino", "ehrhist_a", "fusionhist_c"]
 
@@ -270,21 +261,21 @@ if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
 '''
-funcs = cell("CELL 10 — MODEL / SAMPLER / METRIC FUNCTIONS")
-stageA = cell("CELL 11 — STAGE A").replace('sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15}',
+funcs = cell("Cell 10: model / sampler / metric functions")
+stageA = cell("Cell 11: stage A").replace('sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15}',
     'sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15, "ehrhist_a": 2, "ehrhist_c": 2, "fusionhist_a": 13, "fusionhist_c": 13}')
 assert "ehrhist_a" in stageA
-stageB = cell("CELL 12 — STAGE B")
-base = cell("CELL 13 — BASELINES").replace(
+stageB = cell("Cell 12: stage B")
+base = cell("Cell 13: baselines").replace(
     '''        y = lab[f"{cfg['label']}__{t}"]; hist = lab[f"{'histcln' if cfg['label'] == 'cln' else 'hist'}__{t}"]''',
     '''        y = lab[f"{cfg['label']}__{t}"]; hist = lab[f"hist{cfg['label']}__{t}"]''').replace(
     '''if cfg["label"] in ("adm", "cln") else np.nan''', '')
 assert 'hist{cfg' in base
-ana = cell("CELL 14 — MERGE + ANALYSIS")
+ana = cell("Cell 14: merge + analysis")
 ana = ana.replace('if "P1_admission" in set(R.protocol):', 'if "P1_chexpert" in set(R.protocol):').replace(
     'sel1 = best[best.protocol == "P1_admission"]', 'sel1 = best[best.protocol == "P1_chexpert"]').replace(
     'DIRS["analysis"] / f"{V}_tableC_P1adm_seen_unseen.csv"', 'DIRS["analysis"] / f"{V}_tableC_P1cx_seen_unseen.csv"').replace(
-    'print("\\nP1_admission — seen vs unseen patients (macro)\\n"', 'print("\\nP1_chexpert — seen vs unseen patients (macro)\\n"')
+    'print("\\nP1_admission - seen vs unseen patients (macro)\\n"', 'print("\\nP1_chexpert - seen vs unseen patients (macro)\\n"')
 a = ana.index("# --- patient-cluster bootstrap"); b = ana.index("numbers = {")
 strat = r'''# --- imbalance strategies vs none (paired, same classifier/target/fold) ---
 srows = []
@@ -312,15 +303,15 @@ ana = ana.replace('''    for d in ["labels", "manifests", "analysis"]:
         for f in sorted(DIRS[d].glob("*")):
             if f.is_file() and not f.name.endswith(".tmp") and "cohort_studies" not in f.name and "dicom_study_map" not in f.name:''')
 assert "BQ_SRC" not in ana and "RECON" not in ana and "BOOT" not in ana, "leftover v4 references"
-flush = cell("CELL 15 — FLUSH")
+flush = cell("Cell 15: flush")
 
 src = intro + control + setup + helpers + load + chex + table + funcs + stageA + stageB + base + ana + flush
 # renumber cell headers sequentially
 n = [0]
 def renum(m):
     n[0] += 1
-    return f"# ============================== CELL {n[0]} —"
-src = re.sub(r"# ============================== CELL \d+ —", renum, src)
+    return f"# Cell {n[0]}:"
+src = re.sub(r"# Cell \d+:", renum, src)
 open(HERE + "/nb_v5_src.py", "w").write(src)
 compile(src, "nb_v5", "exec")
 convert(HERE + "/nb_v5_src.py", HERE + "/../notebooks/STEP6_v5_2026-10-19_chexpert_labels.ipynb")

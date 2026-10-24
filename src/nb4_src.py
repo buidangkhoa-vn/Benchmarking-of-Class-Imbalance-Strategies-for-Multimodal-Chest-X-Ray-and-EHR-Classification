@@ -1,34 +1,24 @@
 # %% [markdown]
-# # STEP 4 (v3) — P4 admission-level labels + P5 calendar-time split
+# # STEP 4 (v3): admission-level labels (P4) and calendar-time split (P5)
 #
-# **What this notebook does** (nothing from P1/P2/P3 is rerun):
-# 1. Extracts from **BigQuery** four MIMIC-IV tables for the cohort's 10,479 patients: `admissions`, `patients`, `diagnoses_icd`, `d_icd_diagnoses`.
-# 2. Rebuilds the assignment of the 8 labels from ICD codes and checks it against the labels in the CSV.
-# 3. Measures **label timing**: whether each positive radiograph is positive because of a diagnosis in *its own admission*, an *earlier* one, or only a *later* one (look-ahead).
-# 4. **P4_admission**: label = diagnosis coded in the radiograph's own admission; patient split (the same 5 P2 folds).
-# 5. **P5_temporal**: patients ordered by **estimated real year** (from `anchor_year_group`), earliest 64% train / 16% val / latest 20% test; run with the released labels (`P5_temporal`) and the admission-level labels (`P5_temporal_adm`).
-# 6. Result tables + one small zip archive.
+# 1. Extracts admissions, patients, diagnoses_icd and d_icd_diagnoses for the cohort from BigQuery.
+# 2. Rebuilds the 8 labels from the ICD codes and compares them with the CSV.
+# 3. Label timing: is a positive radiograph positive because of its own admission, an earlier one or a later one?
+# 4. P4_admission: label = diagnosis of the radiograph's own admission, P2 patient folds.
+# 5. P5_temporal: patients ordered by estimated year (anchor_year_group), 64/16/20 split, with the released labels
+#    (P5_temporal) and the admission-level labels (P5_temporal_adm).
 #
-# **How to run** — Runtime: **CPU, High-RAM** → set `GCP_PROJECT` in CELL 1 → **Run all**.
-# - Colab + Drive can run under any account (the one with the `data_aug` folder and Colab Pro).
-# - BigQuery: CELL 5 prints a link → open it, choose **<your PhysioNet-credentialed Google account>** (PhysioNet access) → Allow → copy the code → paste it into the input box → Enter.
-#   `GCP_PROJECT` is the placeholder `YOUR_GCP_PROJECT_ID` (the BigQuery Sandbox project of that account).
-#   (If Colab also runs under that account, set `BQ_AUTH = "same_account"` to use the standard sign-in window.)
-# - If pasting the code fails: run the small notebook **STEP4a** with the credentialed account (free Colab, ~5 min), download
-#   `v3_bq_extract.zip` and upload it to `MyDrive/data_aug/MMMDA_runs/` of the account that runs this notebook → Run all again.
-# - Expected time: BigQuery ~2–5 min, training ~40–90 min (depending on cores).
-# - If the session drops: reopen this notebook → Run all (finished parts are skipped; BigQuery is not queried again).
-# - Done when `FLUSH DONE` appears. The summary archive `v3_P4P5_for_claude.zip` is written to the output folder (path printed at the end).
-#
-# Every folder/file this notebook creates carries the version prefix `v3`.
+# Set GCP_PROJECT in cell 1, then Run all (CPU, high RAM). BQ_AUTH = "other_account" signs in to BigQuery with a second
+# account (paste the verification code); use "same_account" if Colab runs under the account with PhysioNet access.
+# If the sign-in fails, run STEP4a with that account and put v3_bq_extract.zip in MyDrive/data_aug/MMMDA_runs/.
+# BigQuery takes a few minutes, training 40-90 min. A rerun skips finished parts. Output names start with v3.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of the account with PhysioNet access (<your PhysioNet-credentialed Google account>)
-BQ_AUTH       = "other_account"       # "other_account": sign in to BigQuery with a different account than the one running Colab
-                                      #                  (paste a verification code; choose the account with PhysioNet access)
-                                      # "same_account" : the account running Colab is the account with PhysioNet access
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project with PhysioNet access
+BQ_AUTH       = "other_account"       # "other_account": BigQuery account differs from the Colab account
+                                      # "same_account": Colab runs under the PhysioNet account
 VERSION       = "v3_2026-10-19"       # version tag: part of every folder/file name this notebook creates
 
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
@@ -50,7 +40,7 @@ BQ_CANDIDATES = [("physionet-data.mimiciv_3_1_hosp", "physionet-data.mimiciv_3_1
 N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("V3_LOCAL_TEST") == "1"           # offline test only
@@ -70,7 +60,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| VERSION:", VERSION)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob, re, shutil, zipfile
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -116,12 +106,12 @@ for d in list(DIRS.values()) + [CACHE / f"{V}_X", CACHE / f"{V}_splits", LOUT]:
 print("OUT  :", OUT)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA ==============================
+# Cell 4: load + lock data
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -138,7 +128,7 @@ SIDS = [int(s) for s in S.index]; HIDS = [int(h) for h in df.hadm_id]
 print("subjects", len(SIDS), "| admissions with an image", len(HIDS))
 
 # %%
-# ============================== CELL 5 — BIGQUERY EXTRACTION (cached on Drive) ==============================
+# Cell 5: BigQuery extraction
 BQF = {k: DIRS["bq"] / f"{V}_bq_{k}.csv.gz" for k in ["admissions", "patients", "diagnoses", "icd_titles"]}
 BQ_SRC = DIRS["bq"] / f"{V}_bq_source.json"
 if LOCAL_TEST and os.environ.get("V3_BQ_DIR"):
@@ -199,7 +189,7 @@ if not all(f.exists() for f in BQF.values()):
                            "Check that GCP_PROJECT belongs to the account that just signed in and that the BigQuery API is enabled.")
     P_S = [bigquery.ArrayQueryParameter("s", "INT64", SIDS)]
     P_H = [bigquery.ArrayQueryParameter("h", "INT64", HIDS)]
-    # --- discover extra candidate datasets (may be forbidden; that is fine) ---
+    # further candidate datasets (listing may be forbidden)
     cands = list(BQ_CANDIDATES)
     try:
         for ds in client.list_datasets(project="physionet-data"):
@@ -208,7 +198,7 @@ if not all(f.exists() for f in BQF.values()):
                 cands.insert(0, ("physionet-data." + n, "physionet-data." + n))
     except Exception as e:
         print("list_datasets not permitted (skipped):", repr(e)[:120])
-    # --- pick the dataset whose admissions match our hadm_id + admission date ---
+    # pick the dataset whose admissions match hadm_id and admission date
     checks, errs = [], []
     our = df.set_index("hadm_id")
     study = pd.to_datetime(our.StudyDate.astype(str), format="%Y%m%d")
@@ -229,7 +219,7 @@ if not all(f.exists() for f in BQF.values()):
     ok = [c for c in checks if c["found"] > 0.98 and max(c["date_match"], c["study_in_admission"]) > 0.95]
     if not ok:
         hint = ("\nIf the error is 403/Access Denied: the signed-in Google account has no access to physionet-data on BigQuery "
-                "(physionet.org → MIMIC-IV page → 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
+                "(physionet.org -> MIMIC-IV page -> 'Request access using Google BigQuery'), or GCP_PROJECT is wrong.")
         raise RuntimeError(f"No BigQuery dataset matches the cohort.\nchecks={checks}\nerrors={errs}{hint}\nPlease report this full message.")
     src = max(ok, key=lambda c: (c["found"], c["date_match"], c["study_in_admission"]))
     hosp, core = src["hosp"], src["core"]
@@ -257,8 +247,8 @@ assert len(miss_h) <= 0.002 * len(HIDS), f"{len(miss_h)} cohort hadm_id values n
 print(f"admissions {len(adm)} (cohort subjects, all admissions) | diagnoses {len(dxs)} | titles {len(tit)}")
 
 # %%
-# ============================== CELL 6 — RECONSTRUCT THE ICD → LABEL MAPPING ==============================
-# Broad keyword candidates on ICD long titles; the released subject-level labels decide which codes define a label.
+# Cell 6: reconstruct the ICD -> label mapping
+# keyword candidates on ICD long titles; the released labels decide which codes define a label
 PATTERNS = {
     "pneumonia":      r"pneumonia|pneumonitis",
     "tuberculosis":   r"tubercul",
@@ -304,10 +294,10 @@ for t in TARGETS:                                     # diagnostics: frequent co
     print(f"[{t}] frequent NON-selected codes among positives:",
           "; ".join(f"{stats.title.loc[i][:40]} (n={int(stats.n_subj.loc[i])}, p={stats[f'pos_{t}'].loc[i] / stats.n_subj.loc[i]:.2f})" for i in c.index))
 P4_TARGETS = RECON[(RECON.sensitivity >= 0.80) & (RECON.ppv >= 0.80)].target.tolist()
-print("\nTargets reliable enough for admission-level labels (sens & ppv ≥ 0.80):", P4_TARGETS)
+print("\nTargets reliable enough for admission-level labels (sens & ppv >= 0.80):", P4_TARGETS)
 
 # %%
-# ============================== CELL 7 — ADMISSION-LEVEL LABELS + LABEL TIMING ==============================
+# Cell 7: admission-level labels + label timing
 admt = adm.drop_duplicates("hadm_id").set_index("hadm_id").admittime
 img = df[["dataset_position", "subject_id", "hadm_id", "dicom", "StudyDate", "study_year"] + TARGETS].copy()
 img["admittime"] = img.hadm_id.map(admt)
@@ -323,7 +313,7 @@ for t in TARGETS:
     first_dx, last_dx = img.subject_id.map(g.min()), img.subject_id.map(g.max())
     earlier = (first_dx < img.admittime).fillna(False)
     later = (last_dx > img.admittime).fillna(False)
-    img[f"adm_{t}"] = (same & (img[t] == 1)).astype(np.int8)      # admission-aligned label (gated by released label)
+    img[f"adm_{t}"] = (same & (img[t] == 1)).astype(np.int8)      # admission-aligned label
     img[f"hist_{t}"] = earlier.astype(np.int8)                     # diagnosed in an EARLIER admission (known at imaging time)
     pos = img[t] == 1
     cat = np.select([same, earlier & ~later, later & ~earlier, earlier & later], ["same", "earlier_only", "later_only", "earlier_and_later"], "not_found")
@@ -344,7 +334,7 @@ tot = TIMING[["pos_images", "n_same", "n_later_only"]].sum()
 print(f"\nTotal: {tot.n_later_only}/{tot.pos_images} positive radiographs ({100 * tot.n_later_only / tot.pos_images:.1f}%) are positive only because of a diagnosis in a LATER admission (look-ahead)")
 
 # %%
-# ============================== CELL 8 — P5 TEMPORAL SPLIT (real calendar time) ==============================
+# Cell 8: P5 temporal split
 pt = pts.drop_duplicates("subject_id").set_index("subject_id")
 g0 = pt.anchor_year_group.astype(str).str.extract(r"(\d{4})")[0].astype(float)
 img["est_year"] = (img.subject_id.map(g0) + 1 + (img.study_year - img.subject_id.map(pt.anchor_year))).astype(float)
@@ -358,11 +348,11 @@ atomic_to_csv(man5, DIRS["manifests"] / f"{V}_folds_P5_temporal.csv")
 p5_report = man5.groupby("role").est_first_year.describe()[["count", "min", "50%", "max"]]
 p5_report = p5_report.join(S.join(man5.set_index("subject_id").role).groupby("role")[TARGETS].mean().mul(100).round(1))
 atomic_to_csv(p5_report.reset_index(), DIRS["manifests"] / f"{V}_P5_split_report.csv")
-print("estimated real year of each image:", img.est_year.min(), "–", img.est_year.max())
+print("estimated real year of each image:", img.est_year.min(), "-", img.est_year.max())
 print(p5_report.to_string())
 
 # %%
-# ============================== CELL 9 — TABLE, FEATURE SETS, SPLITS ==============================
+# Cell 9: table, feature sets, splits
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -410,7 +400,7 @@ CLFS = ["LR", "LGBM", "ET"]
 G_FEATS = list(FEATSETS)
 if RUN_MODE == "preflight":
     PROTO["P4_admission"]["folds"] = [0]; G_FEATS = ["ehr", "img_raddino"]; CLFS = ["LR", "LGBM"]
-if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline test only
     PROTO["P4_admission"]["folds"] = [0]; CLFS = ["LR", "LGBM"]; G_FEATS = ["ehr", "img_raddino"]
 
 # eligibility: enough positives in train / val / test for every (protocol, fold, target)
@@ -435,7 +425,7 @@ if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
 # %%
-# ============================== CELL 10 — MODEL / SAMPLER / METRIC FUNCTIONS (same as v2) ==============================
+# Cell 10: model / sampler / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fs, pca_dim):
@@ -517,7 +507,7 @@ def strategies_for(has_disc):
     return ["none", "class_weight", "ROS", "SMOTENC_typeaware" if has_disc else "SMOTE"]
 
 # %%
-# ============================== CELL 11 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 11: stage A: preprocessing cache
 def prep_task(key, cache, featsets, pca_dim):
     sname, fold, feat = key
     out = Path(cache) / f"{V}_X" / f"{sname}__f{fold}__{feat}.npz"
@@ -549,10 +539,10 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 n_fits = sum(len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TASKS)
 sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15}
 eta = sum(sec[ft] * len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TODO) / NP / 60
-print(f"model fits: {n_fits} | ETA ≈ {eta:.0f} min with {NP} cores")
+print(f"model fits: {n_fits} | ETA ~ {eta:.0f} min with {NP} cores")
 
 # %%
-# ============================== CELL 12 — STAGE B: MODELS (resume-safe: 2 files per task on Drive) ==============================
+# Cell 12: stage B: models
 def model_task(task, cfg):
     protocol, fold, feat, target = task
     tag = f"{protocol}__f{fold}__{feat}__{target}"
@@ -607,7 +597,7 @@ for task, n_new, n_err in pbar:
 print(f"stage B: {(time.time() - t0) / 60:.1f} min | new fits {tot_new} | errors {tot_err}")
 
 # %%
-# ============================== CELL 13 — BASELINES (all-positive, EHR lookup, history) ==============================
+# Cell 13: baselines
 def f2_at(y, yhat):
     y = y.astype(bool); yhat = yhat.astype(bool)
     tp = (y & yhat).sum(); fp = (~y & yhat).sum(); fn = (y & ~yhat).sum(); d = 5 * tp + 4 * fn + fp
@@ -635,7 +625,7 @@ atomic_to_csv(BASE, DIRS["analysis"] / f"{V}_baselines.csv")
 print(BASE.groupby("protocol")[["trivial_f2", "lookup_f2", "lookup_hit_rate", "history_f2"]].mean().round(3))
 
 # %%
-# ============================== CELL 14 — MERGE + ANALYSIS ==============================
+# Cell 14: merge + analysis
 res_files = sorted(glob.glob(str(DIRS["results"] / f"{V}_*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(DIRS["errors"] / f"{V}_*.csv")))
@@ -686,7 +676,7 @@ for p in [p for p in PROTO if PROTO[p]["split"] == "P5" and p in set(best.protoc
 BOOT = pd.DataFrame(boot_rows)
 if len(BOOT):
     atomic_to_csv(BOOT.round(4), DIRS["analysis"] / f"{V}_P5_bootstrap.csv")
-    print("\nP5 (single calendar-time split) — macro F2, 95% CI from patient-level bootstrap\n", BOOT.round(3).to_string(index=False))
+    print("\nP5 (single calendar-time split) - macro F2, 95% CI from patient-level bootstrap\n", BOOT.round(3).to_string(index=False))
 
 numbers = {"version": VERSION, "data_hash": data_hash, "bq_source": json.load(open(BQ_SRC)),
            "label_reconstruction": RECON.round(4).to_dict("records"), "label_timing": TIMING.to_dict("records"),
@@ -696,8 +686,8 @@ numbers = {"version": VERSION, "data_hash": data_hash, "bq_source": json.load(op
            "versions": {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__, "sklearn": sklearn.__version__}}
 atomic_json(numbers, DIRS["analysis"] / f"{V}_paper_numbers.json")
 
-# --- one small zip to send back (tables + admission labels; no predictions) ---
-ZIP = OUT / f"{V}_P4P5_for_claude.zip"
+# summary zip (tables and admission labels, no predictions)
+ZIP = OUT / f"{V}_P4P5_summary.zip"
 tmpz = str(ZIP) + ".tmp"
 with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
     for d in ["labels", "manifests", "analysis"]:
@@ -709,9 +699,9 @@ os.replace(tmpz, ZIP)
 print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 15 — FLUSH TO DRIVE (required before closing the session) ==============================
+# Cell 15: flush to Drive
 if IN_COLAB:
     print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — download", ZIP.name, "from", OUT)
+    print("FLUSH DONE - download", ZIP.name, "from", OUT)

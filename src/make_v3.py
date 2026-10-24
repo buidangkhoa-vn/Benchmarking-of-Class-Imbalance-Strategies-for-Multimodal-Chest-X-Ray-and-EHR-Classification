@@ -12,35 +12,30 @@ def cell_with(marker):
     hit = [c for c in cells if marker in c]
     assert len(hit) == 1, marker
     return hit[0]
-CONTROL = cell_with("CELL 1 — CONTROL PANEL")
-LOAD = cell_with("CELL 4 — LOAD + LOCK DATA")
-BQ = cell_with("CELL 5 — BIGQUERY EXTRACTION")
+CONTROL = cell_with("Cell 1: control panel")
+LOAD = cell_with("Cell 4: load + lock data")
+BQ = cell_with("Cell 5: BigQuery extraction")
 cand = re.search(r"BQ_CANDIDATES = \[.*?\]\s*#[^\n]*\n", CONTROL, re.S).group(0)
 
 intro = '''# %% [markdown]
-# # STEP 4a (v3) — Extract four MIMIC-IV tables from BigQuery with the PhysioNet-credentialed account
+# # STEP 4a (v3): BigQuery extraction with the PhysioNet-credentialed account
 #
-# Use only if the account that runs Colab (STEP4) has **no** PhysioNet access on BigQuery and the code-paste login in STEP4 fails.
-#
-# 1. Open this notebook in Colab **with <your PhysioNet-credentialed Google account>** (the account with PhysioNet access). Free Colab is enough; CPU runtime, ~5 min.
-# 2. Set `GCP_PROJECT` (placeholder `YOUR_GCP_PROJECT_ID`) → **Run all**.
-# 3. When prompted, upload `x_ray_and_features_data.csv`; in the Google sign-in window choose the credentialed account and grant all permissions.
-# 4. The browser then downloads `v3_bq_extract.zip` (~10 MB).
-# 5. Upload that zip to the Google Drive **of the account that runs STEP4**, folder `MyDrive/data_aug/MMMDA_runs/` → open STEP4 → Run all.
-#
-# This notebook writes nothing to the Drive of the credentialed account.
+# Only needed if STEP4 cannot sign in to BigQuery. Open this notebook with the credentialed account (free Colab, CPU,
+# about 5 min), set GCP_PROJECT, Run all, upload x_ray_and_features_data.csv when asked and allow access in the sign-in
+# window. The browser then downloads v3_bq_extract.zip (about 10 MB). Put it in MyDrive/data_aug/MMMDA_runs/ of the
+# account that runs STEP4 and rerun STEP4. Nothing is written to the Drive of the credentialed account.
 
 '''
 control = f'''# %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
-GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project of <your PhysioNet-credentialed Google account>
+# Cell 1: control panel
+GCP_PROJECT   = "YOUR_GCP_PROJECT_ID"   # BigQuery project with PhysioNet access
 VERSION       = "v3_2026-10-19"
-BQ_AUTH       = "same_account"        # this notebook runs under the credentialed account itself -> standard sign-in window
+BQ_AUTH       = "same_account"        # run under the credentialed account
 EXPECTED_HASH = "da85519958e4bccb"
 {cand}
 '''
 setup = '''# %%
-# ============================== CELL 2 — SETUP + UPLOAD CSV ==============================
+# Cell 2: setup + upload CSV
 import os, sys, re, json, time, hashlib, shutil, zipfile, subprocess, importlib
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -79,7 +74,7 @@ DIRS["bq"].mkdir(parents=True, exist_ok=True)
 
 '''
 finish = '''# %%
-# ============================== CELL 5 — ZIP + DOWNLOAD ==============================
+# Cell 5: zip + download
 ZIP = Path(OUT_ROOT) / f"{V}_bq_extract.zip"
 with zipfile.ZipFile(str(ZIP) + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
     for f in list(BQF.values()) + [BQ_SRC]:
@@ -95,5 +90,5 @@ a_src = intro + control + setup + LOAD + BQ + finish
 open(HERE + "/nb4a_src.py", "w").write(a_src)
 
 OUTD = HERE + "/../notebooks"
-convert(HERE + "/nb4a_src.py", f"{OUTD}/STEP4a_v3_2026-10-19_BQ_extract_MAIN_ACCOUNT_only_if_needed.ipynb")
+convert(HERE + "/nb4a_src.py", f"{OUTD}/STEP4a_v3_2026-10-19_BQ_extract_optional.ipynb")
 convert(HERE + "/nb4_src.py", f"{OUTD}/STEP4_v3_2026-10-19_P4P5_admission_temporal.ipynb")

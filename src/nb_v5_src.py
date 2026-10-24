@@ -1,28 +1,18 @@
 # %% [markdown]
-# # STEP 6 (v5) — CheXpert report labels (one per radiograph): record split (P1) vs. patient split (P2)
+# # STEP 6 (v5): CheXpert report labels and time-aligned EHR history
 #
-# **Purpose.** Test the paper's conclusions on a second label source that is defined per radiograph: the CheXpert labels
-# (U-zeros) that MIMIC-CXR-JPG provides for the same 29,083 radiographs of the cohort. Questions:
-# 1. With per-radiograph labels, how much does the record split (P1) still inflate results compared with the patient split (P2)?
-# 2. Do the imbalance strategies help with these labels?
-# 3. How do the image inputs (11 scores, RAD-DINO) compare with EHR?
+# CheXpert labels (U-zeros) of the same 29,083 radiographs under record folds (P1) and patient folds (P2): inflation from
+# the record split, strategy effects, and image vs EHR with labels defined per radiograph.
+# Also P4_hist / P4C_hist: A and C labels with age at the radiograph's own admission and 8 prior-diagnosis flags (earlier
+# admissions only), alone and fused with RAD-DINO, on the P2 folds.
 #
-# Also adds **time-aligned EHR** experiments: with the admission-aligned (A) and clean (C) labels of STEP5, the 11 released EHR
-# variables are replaced by features known at imaging time: age at the radiograph's own admission + 8 flags "diagnosed in an EARLIER admission"
-# (`P4_hist`, `P4C_hist`, on the P2 folds), alone and fused with RAD-DINO.
-#
-# **How to run** — Colab (Pro), Runtime **CPU, High-RAM** → **Run all**. Nothing to edit.
-# - The notebook finds the `mimic-cxr-jpg-2.1.0.physionet.org` folder on Drive (as in STEP1) and reads `mimic-cxr-2.0.0-chexpert.csv.gz`
-#   + `mimic-cxr-2.0.0-metadata.csv.gz`. Only if the CheXpert file is missing does it query BigQuery (link → choose
-#   <your PhysioNet-credentialed Google account> → paste the code), as in STEP4.
-# - Needs the STEP5 output folder (`MMMDA_runs/v4_2026-10-19_admlabels`) and the v3 BigQuery tables (`MMMDA_runs/v3_2026-10-19_P4P5/v3_bq`) on Drive.
-# - Expected time ~90–110 min with 8 cores. If the session drops: Run all again (finished tasks are skipped).
-# - Done when `FLUSH DONE` appears. The summary archive is `v5_for_claude.zip` in the output folder.
-#
-# Every folder/file this notebook creates carries the version prefix `v5`.
+# Run all (CPU, high RAM). Reads mimic-cxr-2.0.0-chexpert.csv.gz and mimic-cxr-2.0.0-metadata.csv.gz from the
+# MIMIC-CXR-JPG folder on Drive and falls back to BigQuery if the CheXpert file is missing. Needs the STEP5 outputs
+# (MMMDA_runs/v4_2026-10-19_admlabels) and the v3 tables (MMMDA_runs/v3_2026-10-19_P4P5/v3_bq).
+# About 90-110 min with 8 cores; a rerun skips finished tasks. Output names start with v5.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "full"                # "full" | "preflight" (1 fold, 2 targets, separate folder)
 VERSION       = "v5_2026-10-19"       # version tag: part of every folder/file name this notebook creates
 MIMIC_JPG_ROOT = None                 # None = search automatically; or e.g. "/content/drive/MyDrive/MIMIC_CXR/mimic-cxr-jpg-2.1.0.physionet.org"
@@ -48,7 +38,7 @@ CX_TARGETS = {"cx_pneumonia": "Pneumonia", "cx_lung_opacity": "Lung Opacity", "c
 N_PAR         = None                  # number of parallel processes; None = all cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("V3_LOCAL_TEST") == "1"           # offline test only
@@ -69,7 +59,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| VERSION:", VERSION)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob, re, shutil, zipfile
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -115,12 +105,12 @@ for d in list(DIRS.values()) + [CACHE / f"{V}_X", CACHE / f"{V}_splits", LOUT]:
 print("OUT  :", OUT)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA ==============================
+# Cell 4: load + lock data
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
 IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
@@ -137,7 +127,7 @@ SIDS = [int(s) for s in S.index]; HIDS = [int(h) for h in df.hadm_id]
 print("subjects", len(SIDS), "| admissions with an image", len(HIDS))
 
 # %%
-# ============================== CELL 5 — CHEXPERT LABELS (Drive first, BigQuery fallback) ==============================
+# Cell 5: CheXpert labels
 LABF = DIRS["labels"] / f"{V}_chexpert_cohort_studies.csv.gz"     # chexpert rows of the cohort's studies
 MAPF = DIRS["labels"] / f"{V}_dicom_study_map.csv.gz"             # dicom -> study_id for the cohort's radiographs
 CX_SRC = DIRS["labels"] / f"{V}_chexpert_source.json"
@@ -267,7 +257,7 @@ print("radiographs without any CheXpert finding row (all labels -> 0):", no_repo
 print(CXSUM.to_string(index=False))
 
 # %%
-# ============================== CELL 6 — TABLE, FEATURE SETS, SPLITS ==============================
+# Cell 6: table, feature sets, splits
 E = np.load(f"{RADDINO_DIR}/emb.npy").astype(np.float32)
 ids = pd.read_csv(f"{RADDINO_DIR}/ids.csv")
 posm = df.dicom.map(dict(zip(ids.dicom, range(len(ids)))))
@@ -339,7 +329,7 @@ G_FEATS = list(FEATSETS)
 if RUN_MODE == "preflight":
     for _p in PROTO: PROTO[_p]["folds"] = [0]
     G_FEATS = ["ehr", "img_raddino", "ehrhist_a", "ehrhist_c"]; CLFS = ["LR", "LGBM"]
-if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("V3_TINY") == "1":       # offline test only
     for _p in PROTO: PROTO[_p]["folds"] = [0]
     CLFS = ["LR", "LGBM"]; G_FEATS = ["ehr", "img_raddino", "ehrhist_a", "fusionhist_c"]
 
@@ -364,7 +354,7 @@ if skipped:
     print(pd.DataFrame(skipped).to_string(index=False))
 
 # %%
-# ============================== CELL 7 — MODEL / SAMPLER / METRIC FUNCTIONS (same as v2) ==============================
+# Cell 7: model / sampler / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fs, pca_dim):
@@ -446,7 +436,7 @@ def strategies_for(has_disc):
     return ["none", "class_weight", "ROS", "SMOTENC_typeaware" if has_disc else "SMOTE"]
 
 # %%
-# ============================== CELL 8 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 8: stage A: preprocessing cache
 def prep_task(key, cache, featsets, pca_dim):
     sname, fold, feat = key
     out = Path(cache) / f"{V}_X" / f"{sname}__f{fold}__{feat}.npz"
@@ -478,10 +468,10 @@ print(f"stage A: {len(prep_keys)} caches in {(time.time() - t0) / 60:.1f} min")
 n_fits = sum(len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TASKS)
 sec = {"ehr": 4, "img_xrv": 5, "img_raddino": 12, "fusion_raddino": 15, "ehrhist_a": 2, "ehrhist_c": 2, "fusionhist_a": 13, "fusionhist_c": 13}
 eta = sum(sec[ft] * len(strategies_for(bool(FEATSETS[ft]["bin"]))) * len(CLFS) for _, _, ft, _ in TODO) / NP / 60
-print(f"model fits: {n_fits} | ETA ≈ {eta:.0f} min with {NP} cores")
+print(f"model fits: {n_fits} | ETA ~ {eta:.0f} min with {NP} cores")
 
 # %%
-# ============================== CELL 9 — STAGE B: MODELS (resume-safe: 2 files per task on Drive) ==============================
+# Cell 9: stage B: models
 def model_task(task, cfg):
     protocol, fold, feat, target = task
     tag = f"{protocol}__f{fold}__{feat}__{target}"
@@ -539,7 +529,7 @@ for task, n_new, n_err in pbar:
 print(f"stage B: {(time.time() - t0) / 60:.1f} min | new fits {tot_new} | errors {tot_err}")
 
 # %%
-# ============================== CELL 10 — BASELINES (all-positive, EHR lookup, history) ==============================
+# Cell 10: baselines
 def f2_at(y, yhat):
     y = y.astype(bool); yhat = yhat.astype(bool)
     tp = (y & yhat).sum(); fp = (~y & yhat).sum(); fn = (y & ~yhat).sum(); d = 5 * tp + 4 * fn + fp
@@ -571,7 +561,7 @@ atomic_to_csv(BASE, DIRS["analysis"] / f"{V}_baselines.csv")
 print(BASE.groupby("protocol")[["trivial_f2", "lookup_f2", "lookup_any_f2", "lookup_hit_rate", "history_f2"]].mean().round(3))
 
 # %%
-# ============================== CELL 11 — MERGE + ANALYSIS ==============================
+# Cell 11: merge + analysis
 res_files = sorted(glob.glob(str(DIRS["results"] / f"{V}_*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(DIRS["errors"] / f"{V}_*.csv")))
@@ -595,7 +585,7 @@ if "P1_chexpert" in set(R.protocol):
     P1r = R.merge(sel1, on=KEY + ["strategy", "classifier"])
     TC = P1r.groupby(["feature_set", "target"])[["test_f2", "seen_f2", "unseen_f2", "unseen_trivial_f2", "seen_n", "unseen_n"]].mean()
     atomic_to_csv(TC.reset_index().round(4), DIRS["analysis"] / f"{V}_tableC_P1cx_seen_unseen.csv")
-    print("\nP1_chexpert — seen vs unseen patients (macro)\n", TC.groupby("feature_set").mean().round(3).to_string())
+    print("\nP1_chexpert - seen vs unseen patients (macro)\n", TC.groupby("feature_set").mean().round(3).to_string())
 print("\nMACRO (configuration selected on inner-validation F2)\n", TA.round(3).to_string())
 
 # --- imbalance strategies vs none (paired, same classifier/target/fold) ---
@@ -616,8 +606,8 @@ numbers = {"version": VERSION, "data_hash": data_hash, "chexpert_source": json.l
            "versions": {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__, "sklearn": sklearn.__version__}}
 atomic_json(numbers, DIRS["analysis"] / f"{V}_paper_numbers.json")
 
-# --- one small zip to send back (tables + admission labels; no predictions) ---
-ZIP = OUT / f"{V}_for_claude.zip"
+# summary zip (tables and admission labels, no predictions)
+ZIP = OUT / f"{V}_summary.zip"
 tmpz = str(ZIP) + ".tmp"
 with zipfile.ZipFile(tmpz, "w", zipfile.ZIP_DEFLATED) as z:
     for d in ["labels", "manifests", "analysis"]:
@@ -628,9 +618,9 @@ os.replace(tmpz, ZIP)
 print("\nFILE TO DOWNLOAD:", ZIP, f"({ZIP.stat().st_size / 1e6:.1f} MB)")
 
 # %%
-# ============================== CELL 12 — FLUSH TO DRIVE (required before closing the session) ==============================
+# Cell 12: flush to Drive
 if IN_COLAB:
     print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — download", ZIP.name, "from", OUT)
+    print("FLUSH DONE - download", ZIP.name, "from", OUT)

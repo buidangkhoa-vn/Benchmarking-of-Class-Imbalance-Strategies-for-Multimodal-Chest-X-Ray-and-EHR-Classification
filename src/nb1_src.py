@@ -1,33 +1,22 @@
 # %% [markdown]
-# # MMMDA NB1 — Leakage-aware class-imbalance benchmark (CXR features + EHR)
+# # NB1: class-imbalance benchmark with leakage-aware splits
 #
-# **What this notebook does**
-# 1. Locks the input CSV (shape, hash, subject-level constancy of labels/EHR).
-# 2. Builds three evaluation protocols on the *same* data:
-#    - `P1_record`  – record-level 5-fold CV that ignores `subject_id` (reproduces the leak of the old benchmark)
-#    - `P2_grouped` – record-level rows, folds grouped by subject
-#    - `P3_patient` – one row per subject (labels/EHR are subject-level), same subject folds as P2
-# 3. Runs imbalance strategies × classifiers × feature sets × targets with an inner validation split
-#    for threshold selection (test folds are never used for any choice).
-# 4. Computes baselines (predict-all-positive, EHR lookup table), merges results, and produces the
-#    paper tables / figures / `paper_numbers.json`.
+# Protocols on the same data:
+# - P1_record: 5-fold CV over radiographs, ignores subject_id
+# - P2_grouped: radiograph rows, folds grouped by subject
+# - P3_patient: one row per subject, same folds as P2
 #
-# **How to run (Colab Pro)**
-# - Runtime: CPU **High-RAM** (or any GPU runtime – only the CPU cores are used here). More cores = faster.
-# - Run cells top to bottom. First run with `RUN_MODE = "preflight"` (~5–15 min), check the printed
-#   preview/ETA, then set `RUN_MODE = "full"` and run again.
-# - Several Colab sessions can share the work: open this notebook in 2–3 sessions, set the same `RUN_TAG`,
-#   `N_WORKERS = k` and a different `WORKER_INDEX` (0..k-1) in each. Everything is resume-safe: if a
-#   session dies, just re-run all cells; finished jobs are skipped.
-# - When all workers are done, run the **MERGE** and **ANALYSIS** cells once (any session, `WORKER_INDEX`
-#   does not matter there).
-# - **Stronger image embeddings (NB2):** `EMBEDDINGS` points to NB2's output folders and is used only when
-#   `emb.npy` exists. Start NB1 now; when NB2 (full) has finished, simply re-run NB1 with the same `RUN_TAG` in
-#   every worker session — finished jobs are skipped and only the new embedding jobs (P2/P3) run.
-# - P3 uses frontal (AP/PA) radiographs for patient-level image features when NB2's `dicom_meta.csv` exists.
+# Each protocol runs imbalance strategy x classifier x feature set x target. Thresholds and configurations are chosen on an
+# inner validation split; test folds are used only for evaluation. Baselines (all-positive, EHR lookup), merge, tables and
+# figures come at the end.
+#
+# Run with RUN_MODE = "preflight" first, then "full". Several Colab sessions can share the run: same RUN_TAG,
+# N_WORKERS = k and a different WORKER_INDEX in each. Finished jobs are skipped after a restart. When all workers are done,
+# run the merge and analysis cells once. NB2 embeddings are used when emb.npy exists; P3 averages frontal views when
+# dicom_meta.csv exists.
 
 # %%
-# ============================== CELL 1 — CONTROL PANEL ==============================
+# Cell 1: control panel
 RUN_MODE      = "preflight"          # "preflight" (tiny grid, separate folder) | "full"
 RUN_TAG       = "leakage_aware_v2"   # new tag => new output folder; never reuse a tag for a changed protocol
 WORKER_INDEX  = 0                    # 0..N_WORKERS-1 (one value per Colab session)
@@ -38,28 +27,26 @@ REQUIRE_EMBEDDINGS = False           # True: stop if the NB2 embeddings are miss
 DRIVE_ROOT    = "/content/drive/MyDrive/data_aug"
 CSV_PATH      = f"{DRIVE_ROOT}/x_ray_and_features_data.csv"
 OUT_ROOT      = f"{DRIVE_ROOT}/leakage_aware_v2"
-LOCAL_CACHE   = "/content/mmmda_cache"          # fast local disk; rebuilt automatically after a restart
-LOCAL_OUT     = "/content/mmmda_out"            # per-job working files (local); each finished task is packed to Drive
-EXPECTED_HASH = "da85519958e4bccb"              # hash of the CSV used by the published benchmark
+LOCAL_CACHE   = "/content/mmmda_cache"          # local disk, rebuilt after a restart
+LOCAL_OUT     = "/content/mmmda_out"            # local per-job files; finished tasks are packed to Drive
+EXPECTED_HASH = "da85519958e4bccb"              # hash of the benchmarked CSV
 
 PROTOCOLS     = ["P3_patient", "P2_grouped", "P1_record"]
-CV_SEEDS      = [42]                 # add 43 later for repeated CV if time allows
+CV_SEEDS      = [42]
 N_FOLDS       = 5
 INNER_VAL_FRAC = 0.20
 
-# Stronger image embeddings from NB2 (full run). Folders without emb.npy are ignored, so this run can start
-# before NB2 finishes: re-run NB1 later with the same RUN_TAG and only the new embedding jobs are executed.
+# NB2 embedding folders; folders without emb.npy are skipped
 EMBEDDINGS    = {"raddino": f"{DRIVE_ROOT}/embeddings/raddino", "xrv1024": f"{DRIVE_ROOT}/embeddings/xrv_chex"}
-EMB_PROTOCOLS = ["P3_patient", "P2_grouped"]    # embedding feature sets are not run under P1 (leak already shown)
+EMB_PROTOCOLS = ["P3_patient", "P2_grouped"]    # no embedding feature sets under P1
 EMB_PCA_DIM   = 64                   # PCA (fit on inner-train only) applied to embeddings
-# View metadata written by NB2 (cell 3). Used for P3: patient-level image features = mean over FRONTAL (AP/PA)
-# radiographs when the patient has one, otherwise over all radiographs. None/missing file -> plain mean.
+# NB2 view metadata; P3 averages frontal (AP/PA) views when available, else all radiographs
 VIEW_META     = f"{DRIVE_ROOT}/embeddings/dicom_meta.csv"
 
 N_PAR         = None                 # parallel processes; None -> all CPU cores
 
 # %%
-# ============================== CELL 2 — INSTALL + MOUNT ==============================
+# Cell 2: install + mount
 import os, sys, subprocess, importlib
 IN_COLAB = "google.colab" in sys.modules
 LOCAL_TEST = os.environ.get("MMMDA_LOCAL_TEST") == "1"     # only used for offline smoke tests
@@ -81,7 +68,7 @@ if IN_COLAB:
 print("cores:", os.cpu_count(), "| RUN_MODE:", RUN_MODE, "| worker", WORKER_INDEX, "/", N_WORKERS)
 
 # %%
-# ============================== CELL 3 — IMPORTS + HELPERS ==============================
+# Cell 3: imports + helpers
 import json, time, hashlib, traceback, warnings, platform, glob
 from pathlib import Path
 import numpy as np, pandas as pd
@@ -128,16 +115,16 @@ for d in [OUT / "manifests", OUT / "results", OUT / "preds_packed", OUT / "error
 print("OUT  :", OUT); print("CACHE:", CACHE)
 
 # %%
-# ============================== CELL 4 — LOAD + LOCK DATA ==============================
+# Cell 4: load + lock data
 df = pd.read_csv(CSV_PATH)
 data_hash = hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest()[:16]
 print("shape", df.shape, "| hash", data_hash)
 assert df.shape == (29083, 48), df.shape
-assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file — STOP"
+assert data_hash == EXPECTED_HASH, "CSV differs from the benchmarked file - STOP"
 assert df.subject_id.nunique() == 10479
 
 TARGETS  = ["pneumonia", "tuberculosis", "bronchitis", "arthritis", "fracture", "lung_cancer", "scoliosis", "lung_infection"]
-IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]   # TorchXRayVision heads untrained by CheXpert weights (always ~0)
+IMG_DEAD = ["2", "5", "6", "9", "11", "12", "13"]   # heads without CheXpert labels (always ~0)
 IMG      = [str(i) for i in range(18) if str(i) not in IMG_DEAD]
 EHR_CONT = ["age", "oxygen", "heart_rate", "temperature", "hemoglobin", "rbc", "wbc"]
 EHR_BIN  = ["diabete", "hiv", "smoke", "cough"]
@@ -149,7 +136,7 @@ for c in TARGETS:
     assert df[c].isna().sum() == 0 and set(df[c].unique()) <= {0, 1}, c
 assert df[EHR_BIN].isna().sum().sum() == 0
 const = df.groupby("subject_id")[TARGETS + EHR].nunique(dropna=False).max()
-assert (const <= 1).all(), "labels/EHR are NOT constant within subject — protocol assumptions break, STOP"
+assert (const <= 1).all(), "labels/EHR are NOT constant within subject - protocol assumptions break, STOP"
 
 df["dataset_position"] = np.arange(len(df))
 subj_lab = df.groupby("subject_id")[TARGETS].first()
@@ -161,12 +148,12 @@ print("records/subject: mean %.2f, max %d | unique EHR vectors %d"
       % (df.groupby("subject_id").size().mean(), df.groupby("subject_id").size().max(), ehr_key.nunique()))
 
 # %%
-# ============================== CELL 5 — TABLES + FEATURE SETS ==============================
+# Cell 5: tables + feature sets
 rec = df[["dataset_position", "subject_id", "dicom", "StudyDate"] + TARGETS + EHR + IMG].copy()
 EMB_COLS = {}
 for name, folder in EMBEDDINGS.items():
     if not os.path.exists(f"{folder}/emb.npy"):
-        print(f"embedding {name}: not found at {folder} (skipped — run NB2 full, then re-run NB1)")
+        print(f"embedding {name}: not found at {folder} (skipped - run NB2 full, then re-run NB1)")
         continue
     E = np.load(f"{folder}/emb.npy").astype(np.float32)
     ids = pd.read_csv(f"{folder}/ids.csv")
@@ -181,7 +168,7 @@ for name, folder in EMBEDDINGS.items():
 view_stats = {}
 if VIEW_META and os.path.exists(VIEW_META):
     vm = pd.read_csv(VIEW_META, usecols=["dicom", "ViewPosition"])
-    assert rec.dicom.isin(vm.dicom).all() and vm.dicom.is_unique, "dicom_meta.csv incomplete — re-run NB2 cell 3"
+    assert rec.dicom.isin(vm.dicom).all() and vm.dicom.is_unique, "dicom_meta.csv incomplete - re-run NB2 cell 3"
     rec = rec.merge(vm, on="dicom", how="left")
     assert len(rec) == len(df) and (rec.dataset_position.values == np.arange(len(df))).all()
     rec["frontal"] = rec.ViewPosition.isin(["AP", "PA"])
@@ -191,7 +178,7 @@ if VIEW_META and os.path.exists(VIEW_META):
     print("views:", view_stats)
 else:
     rec["frontal"] = True
-    print("no view metadata — patient-level image features use all radiographs")
+    print("no view metadata - patient-level image features use all radiographs")
 
 if REQUIRE_EMBEDDINGS and len(EMB_COLS) < len(EMBEDDINGS):
     raise RuntimeError("NB2 embeddings (emb.npy) not found. Run NB2 with RUN_MODE='full' to completion, then Run all in this notebook again.")
@@ -221,7 +208,7 @@ np.savez(CACHE / "labels_pat.npz", **{t: pat[t].values.astype(np.int8) for t in 
 print("feature sets:", list(FEATSETS))
 
 # %%
-# ============================== CELL 6 — GRID (preflight vs full) ==============================
+# Cell 6: grid
 CLFS_ALL   = ["LR", "RF", "ET", "LGBM", "XGB"]
 NATIVE_ALL = ["BRF", "EasyEns"]
 
@@ -237,9 +224,9 @@ else:
     G_FEATS, G_TARGETS = list(FEATSETS), TARGETS
     G_CLFS, G_NATIVE = CLFS_ALL, NATIVE_ALL
     G_STRATS = {"none", "class_weight", "ROS", "SMOTE", "SMOTE_naive", "SMOTENC_typeaware"}
-# P1 only needs to reproduce the leak -> reduced grid
+# reduced grid for P1
 P1_CLFS, P1_STRATS, P1_NATIVE = ["LR", "RF", "ET", "LGBM"], {"none", "ROS", "SMOTE", "SMOTE_naive", "SMOTENC_typeaware"}, []
-if LOCAL_TEST and os.environ.get("MMMDA_TINY") == "1":   # offline smoke test only — ignored on Colab
+if LOCAL_TEST and os.environ.get("MMMDA_TINY") == "1":   # offline test only
     G_FOLDS = [0, 1]; G_TARGETS = ["pneumonia", "scoliosis"]; G_CLFS = ["LR", "LGBM"]; G_NATIVE = ["BRF"]; P1_CLFS = ["LR", "LGBM"]
 
 def job_grid(protocol, has_discrete):
@@ -252,7 +239,7 @@ def job_grid(protocol, has_discrete):
     return jobs
 
 # %%
-# ============================== CELL 7 — FOLD MANIFESTS + SPLITS ==============================
+# Cell 7: fold manifests + splits
 def subject_manifest(seed):
     path = OUT / "manifests" / f"folds_subject_s{seed}.csv"
     if path.exists():
@@ -315,7 +302,7 @@ atomic_to_csv(split_report, OUT / "manifests" / "split_report.csv")
 print(split_report.groupby("protocol")[["n_tr", "n_va", "n_te", "test_seen_%", "min_test_pos", "min_val_pos", "min_train_pos"]].mean().round(1))
 
 # %%
-# ============================== CELL 8 — MODEL / SAMPLER / METRIC FUNCTIONS ==============================
+# Cell 8: model / sampler / metric functions
 GRID = np.round(np.arange(0.01, 1.0, 0.01), 2)
 
 def build_preprocessor(fs, pca_dim):
@@ -409,7 +396,7 @@ def metric_block(y, p, thr, prefix):
     return {f"{prefix}_{k}": v for k, v in out.items()}
 
 # %%
-# ============================== CELL 9 — STAGE A: PREPROCESSING CACHE ==============================
+# Cell 9: stage A: preprocessing cache
 def prep_task(key, cfg):
     protocol, seed, fold, feat = key
     out = Path(cfg["cache"]) / "X" / f"{protocol}__s{seed}__f{fold}__{feat}.npz"
@@ -454,7 +441,7 @@ else:
     print("ROLE = final: no training in this notebook")
 
 # %%
-# ============================== CELL 10 — STAGE B: MODELS (resume-safe, parallel) ==============================
+# Cell 10: stage B: models
 def pred_keys_on_drive(out, tag):
     """(strategy, classifier) pairs whose predictions are already safely on Drive (packed or legacy layout)."""
     keys = set()
@@ -528,7 +515,7 @@ def model_task(task, cfg, grid_fn_args):
         except Exception as e:
             errors.append({"job_key": job_key, "error": repr(e)[:300], "trace": traceback.format_exc()[-1500:],
                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")})
-    # ---- publish the task to Drive as 2 files (results CSV + one packed npz) ----
+    # write the task to Drive (results csv + one npz)
     local_files = sorted(f for f in lpdir.glob("*.npz") if not f.name.endswith(".tmp.npz"))
     if local_files or (rows and not res_path.exists()):
         arrays = {}
@@ -569,7 +556,7 @@ if ROLE != "final":
         print(f"\n>>> WORKER {WORKER_INDEX} DONE. When all {N_WORKERS} workers are done, open the FINAL notebook and Run all.")
 
 # %%
-# ============================== CELL 11 — BASELINES (trivial + EHR lookup table) ==============================
+# Cell 11: baselines
 def f2_at(y, yhat):
     y = y.astype(bool); yhat = yhat.astype(bool)
     tp = (y & yhat).sum(); fp = (~y & yhat).sum(); fn = (y & ~yhat).sum(); d = 5 * tp + 4 * fn + fp
@@ -600,7 +587,7 @@ atomic_to_csv(baselines, OUT / "analysis" / "baselines.csv")
 print(baselines.groupby("protocol")[["trivial_f2", "lookup_f2", "lookup_hit_rate"]].mean().round(3))
 
 # %%
-# ============================== CELL 12 — MERGE + COMPLETENESS ==============================
+# Cell 12: merge + completeness
 res_files = sorted(glob.glob(str(OUT / "results" / "*.csv")))
 R = pd.concat([pd.read_csv(f) for f in res_files], ignore_index=True) if res_files else pd.DataFrame()
 err_files = sorted(glob.glob(str(OUT / "errors" / "*.csv")))
@@ -652,11 +639,11 @@ if len(R):
         s_rec = sec.get("P2_grouped", sec.mean()); s_pat = sec.get("P3_patient", sec.mean())
         counts = {p: full_job_count(p) for p in PROTOCOLS}
         eta = sum(counts[p] * (s_pat if p == "P3_patient" else s_rec) for p in counts) / NP / 3600
-        print(f"\nFULL grid ≈ {counts} jobs | ETA with {NP} cores ≈ {eta:.1f} h for ONE worker "
+        print(f"\nFULL grid ~ {counts} jobs | ETA with {NP} cores ~ {eta:.1f} h for ONE worker "
               f"(divide by the number of parallel Colab sessions)")
 
 # %%
-# ============================== CELL 13 — ANALYSIS (tables, figures, paper_numbers.json) ==============================
+# Cell 13: analysis
 def run_analysis():
     import matplotlib
     import matplotlib.pyplot as plt
@@ -682,7 +669,7 @@ def run_analysis():
     TA = TA.join(B.groupby("protocol")[["lookup_f2", "lookup_hit_rate"]].mean(), on="protocol")
     TA["prauc_lift"] = best.assign(l=best.test_pr_auc / best.test_prev).groupby(["protocol", "feature_set"]).l.mean()
     atomic_to_csv(TA.reset_index().round(4), AN / "tableA_protocol_effect.csv")
-    print("TABLE A — macro over targets (selected by inner-val F2)\n", TA.round(3).to_string())
+    print("TABLE A - macro over targets (selected by inner-val F2)\n", TA.round(3).to_string())
     numbers["tableA"] = TA.round(4).reset_index().to_dict("records")
 
     # --- Table B: imbalance strategies (P3 and P2), paired against 'none' with the same classifier ---
@@ -722,7 +709,7 @@ def run_analysis():
                    .groupby(["protocol", "feature_set", "strategy", "classifier", "target"]).test_f2.mean()
                    .groupby(["protocol", "feature_set", "strategy", "classifier"]).mean().unstack("classifier"))
     atomic_to_csv(strat_macro.reset_index().round(4), AN / "tableB2_macro_f2_strategy_by_classifier.csv")
-    print("\nTABLE B — Δ test F2 vs 'none' (same classifier), paired over target×fold\n",
+    print("\nTABLE B - Δ test F2 vs 'none' (same classifier), paired over target x fold\n",
           TB[TB.strategy != "native"].groupby(["protocol", "feature_set", "strategy"]).dF2_mean.mean().unstack().round(4))
 
     # --- Sampler audit: invalid synthetic binary values ---
@@ -740,7 +727,7 @@ def run_analysis():
                                                    "unseen_pr_auc", "unseen_prev", "seen_n", "unseen_n"]].mean()
         TCm = TC.groupby("feature_set").mean()
         atomic_to_csv(TC.reset_index().round(4), AN / "tableC_P1_seen_unseen.csv")
-        print("\nTABLE C — P1 record split: seen vs unseen test subjects (macro)\n", TCm.round(3).to_string())
+        print("\nTABLE C - P1 record split: seen vs unseen test subjects (macro)\n", TCm.round(3).to_string())
         numbers["tableC_macro"] = TCm.round(4).reset_index().to_dict("records")
 
     # --- Late fusion (image + EHR), weight and threshold chosen on inner validation ---
@@ -853,9 +840,9 @@ else:
     print("ROLE = worker: the analysis runs in the FINAL notebook")
 
 # %%
-# ============================== CELL 14 — FLUSH TO DRIVE (required before closing the session) ==============================
+# Cell 14: flush to Drive
 if IN_COLAB and ROLE in ("worker", "final"):
     print("Flushing all files to Google Drive... do NOT close the session until 'FLUSH DONE' appears.")
     from google.colab import drive as _gdrive
     _gdrive.flush_and_unmount()
-    print("FLUSH DONE — the session can be closed.")
+    print("FLUSH DONE - the session can be closed.")
